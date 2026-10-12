@@ -4,7 +4,9 @@ import {
 } from './services'
 
 import type {
+  FoundRoute,
   NoRouteReason,
+  OptimizationMode,
   ResolvedTravelOption,
   RouteCalculationResult,
   RouteDiagnostics,
@@ -16,11 +18,14 @@ import type {
   ValidationIssue,
 } from './types'
 
+const MAX_ROUTES = 3
+
 interface RouteLabel {
   option: ResolvedTravelOption
   totalCost: number
   legCount: number
   previous: RouteLabel | null
+  pathKey: string
 }
 
 function hasDirectedPath(
@@ -104,12 +109,79 @@ function collectOptions(
     (left, right) =>
       left.departure.epochMilliseconds -
         right.departure.epochMilliseconds ||
-      left.arrival.epochMilliseconds - right.arrival.epochMilliseconds ||
+      left.arrival.epochMilliseconds -
+        right.arrival.epochMilliseconds ||
       left.cost - right.cost ||
+      left.edgeId.localeCompare(right.edgeId) ||
       left.optionId.localeCompare(right.optionId),
   )
 
   return { options, diagnostics }
+}
+
+function createLabel(
+  option: ResolvedTravelOption,
+  previous: RouteLabel | null,
+): RouteLabel {
+  return {
+    option,
+    totalCost: (previous?.totalCost ?? 0) + option.cost,
+    legCount: (previous?.legCount ?? 0) + 1,
+    previous,
+    pathKey:
+      (previous?.pathKey ?? '') +
+      JSON.stringify([option.edgeId, option.optionId]) +
+      '\n',
+  }
+}
+
+function compareLabels(
+  left: RouteLabel,
+  right: RouteLabel,
+  optimization: OptimizationMode,
+): number {
+  const leftArrival = left.option.arrival.epochMilliseconds
+  const rightArrival = right.option.arrival.epochMilliseconds
+
+  if (optimization === 'cheapest') {
+    if (left.totalCost !== right.totalCost) {
+      return left.totalCost - right.totalCost
+    }
+
+    if (leftArrival !== rightArrival) {
+      return leftArrival - rightArrival
+    }
+  } else {
+    if (leftArrival !== rightArrival) {
+      return leftArrival - rightArrival
+    }
+
+    if (left.totalCost !== right.totalCost) {
+      return left.totalCost - right.totalCost
+    }
+  }
+
+  if (left.legCount !== right.legCount) {
+    return left.legCount - right.legCount
+  }
+
+  return left.pathKey.localeCompare(right.pathKey)
+}
+
+function takeBestLabels(
+  labels: readonly RouteLabel[],
+  optimization: OptimizationMode,
+): RouteLabel[] {
+  const unique = new Map<string, RouteLabel>()
+
+  for (const label of labels) {
+    if (!Number.isFinite(label.totalCost)) continue
+    unique.set(label.pathKey, label)
+  }
+
+  return [...unique.values()]
+    .sort((left, right) => compareLabels(left, right, optimization))
+    .slice(0, MAX_ROUTES)
 }
 
 function reconstructLegs(
@@ -142,43 +214,13 @@ function reconstructLegs(
       departure: option.departure,
       arrival: option.arrival,
       travelMinutes: (arrival - departure) / 60_000,
-      waitingBeforeMinutes: (departure - previousArrival) / 60_000,
+      waitingBeforeMinutes:
+        (departure - previousArrival) / 60_000,
     }
 
     previousArrival = arrival
     return leg
   })
-}
-
-function betterFinalLabel(
-  candidate: RouteLabel,
-  current: RouteLabel | null,
-  optimization: RouteSearchParameters['optimization'],
-): boolean {
-  if (current === null) return true
-
-  const candidateArrival = candidate.option.arrival.epochMilliseconds
-  const currentArrival = current.option.arrival.epochMilliseconds
-
-  if (optimization === 'cheapest') {
-    if (candidate.totalCost !== current.totalCost) {
-      return candidate.totalCost < current.totalCost
-    }
-
-    if (candidateArrival !== currentArrival) {
-      return candidateArrival < currentArrival
-    }
-  } else {
-    if (candidateArrival !== currentArrival) {
-      return candidateArrival < currentArrival
-    }
-
-    if (candidate.totalCost !== current.totalCost) {
-      return candidate.totalCost < current.totalCost
-    }
-  }
-
-  return candidate.legCount < current.legCount
 }
 
 function missingRoute(
@@ -208,7 +250,9 @@ export function calculateRoute(
   parameters: RouteSearchParameters = project.routeSearch,
 ): RouteCalculationResult {
   const issues: ValidationIssue[] = []
-  const nodeMap = new Map(project.nodes.map((node) => [node.id, node]))
+  const nodeMap = new Map(
+    project.nodes.map((node) => [node.id, node]),
+  )
 
   const startNodeId = parameters.startNodeId
   const endNodeId = parameters.endNodeId
@@ -247,7 +291,8 @@ export function calculateRoute(
     ) {
       issues.push({
         code: 'invalid-transfer-duration',
-        message: `Некорректное время пересадки в точке «${node.name}».`,
+        message:
+          `Некорректное время пересадки в точке «${node.name}».`,
         field: `nodes.${node.id}.minimumTransferMinutes`,
       })
     }
@@ -276,12 +321,14 @@ export function calculateRoute(
     project.edges,
   )
 
-  const startMilliseconds = requestedDeparture.value.epochMilliseconds
+  const calculatedAt = new Date().toISOString()
+  const startMilliseconds =
+    requestedDeparture.value.epochMilliseconds
 
   if (startNodeId === endNodeId) {
-    return {
+    const route: FoundRoute = {
       status: 'found',
-      calculatedAt: new Date().toISOString(),
+      calculatedAt,
       optimization: parameters.optimization,
       startNodeId,
       endNodeId,
@@ -297,13 +344,24 @@ export function calculateRoute(
       },
       diagnostics,
     }
+
+    return {
+      status: 'found',
+      calculatedAt,
+      optimization: parameters.optimization,
+      routes: [route],
+      diagnostics,
+    }
   }
 
   if (!hasDirectedPath(startNodeId, endNodeId, project.edges)) {
     return missingRoute('no-directed-path', diagnostics)
   }
 
-  const usableEdgeIds = new Set(options.map((option) => option.edgeId))
+  const usableEdgeIds = new Set(
+    options.map((option) => option.edgeId),
+  )
+
   const usableEdges = project.edges.filter((edge) =>
     usableEdgeIds.has(edge.id),
   )
@@ -313,54 +371,43 @@ export function calculateRoute(
   }
 
   const labelsByArrivalNode = new Map<string, RouteLabel[]>()
-  let bestFinal: RouteLabel | null = null
+  let finalLabels: RouteLabel[] = []
 
   for (const option of options) {
     const departure = option.departure.epochMilliseconds
 
     if (departure < startMilliseconds) continue
 
-    let bestCost = Number.POSITIVE_INFINITY
-    let bestLegCount = Number.POSITIVE_INFINITY
-    let bestPrevious: RouteLabel | null = null
-    let reachable = false
+    const candidates: RouteLabel[] = []
 
-    // Начальное ожидание не требует запаса на пересадку.
     if (option.fromNodeId === startNodeId) {
-      bestCost = option.cost
-      bestLegCount = 1
-      reachable = true
+      candidates.push(createLabel(option, null))
     }
 
     const transferMilliseconds =
-      nodeMap.get(option.fromNodeId)!.minimumTransferMinutes * 60_000
+      nodeMap.get(option.fromNodeId)!.minimumTransferMinutes *
+      60_000
 
-    for (
-      const previous of labelsByArrivalNode.get(option.fromNodeId) ?? []
-    ) {
+    const previousLabels =
+      labelsByArrivalNode.get(option.fromNodeId) ?? []
+
+    for (const previous of previousLabels) {
       const readyAt =
         previous.option.arrival.epochMilliseconds +
         transferMilliseconds
 
       if (readyAt > departure) continue
 
-      const candidateCost = previous.totalCost + option.cost
-      const candidateLegCount = previous.legCount + 1
-
-      if (
-        candidateCost < bestCost ||
-        (candidateCost === bestCost && candidateLegCount < bestLegCount)
-      ) {
-        bestCost = candidateCost
-        bestLegCount = candidateLegCount
-        bestPrevious = previous
-        reachable = true
-      }
+      candidates.push(createLabel(option, previous))
     }
 
-    if (!reachable) continue
+    if (candidates.length === 0) continue
 
-    if (!Number.isFinite(bestCost)) {
+    if (
+      candidates.some(
+        (candidate) => !Number.isFinite(candidate.totalCost),
+      )
+    ) {
       return {
         status: 'invalid-request',
         issues: [
@@ -373,61 +420,78 @@ export function calculateRoute(
       }
     }
 
-    const label: RouteLabel = {
-      option,
-      totalCost: bestCost,
-      legCount: bestLegCount,
-      previous: bestPrevious,
+    // Ограничиваем число путей только для этого конкретного рейса.
+    // Состояния разных рейсов в одном городе не объединяем.
+    const bestForOption = takeBestLabels(
+      candidates,
+      parameters.optimization,
+    )
+
+    // Достигнув конечной точки, маршрут завершаем.
+    if (option.toNodeId === endNodeId) {
+      finalLabels = takeBestLabels(
+        [...finalLabels, ...bestForOption],
+        parameters.optimization,
+      )
+      continue
     }
 
     const nodeLabels =
       labelsByArrivalNode.get(option.toNodeId) ?? []
 
-    nodeLabels.push(label)
-    labelsByArrivalNode.set(option.toNodeId, nodeLabels)
+    nodeLabels.push(...bestForOption)
 
-    if (
-      option.toNodeId === endNodeId &&
-      betterFinalLabel(label, bestFinal, parameters.optimization)
-    ) {
-      bestFinal = label
-    }
+    labelsByArrivalNode.set(
+      option.toNodeId,
+      nodeLabels,
+    )
   }
 
-  if (bestFinal === null) {
+  if (finalLabels.length === 0) {
     return missingRoute('no-feasible-schedule', diagnostics)
   }
 
-  const legs = reconstructLegs(bestFinal, startMilliseconds)
+  const routes: FoundRoute[] = finalLabels.map((label) => {
+    const legs = reconstructLegs(label, startMilliseconds)
 
-  const totalTravelMinutes = legs.reduce(
-    (total, leg) => total + leg.travelMinutes,
-    0,
-  )
+    const totalTravelMinutes = legs.reduce(
+      (total, leg) => total + leg.travelMinutes,
+      0,
+    )
 
-  const totalWaitingMinutes = legs.reduce(
-    (total, leg) => total + leg.waitingBeforeMinutes,
-    0,
-  )
+    const totalWaitingMinutes = legs.reduce(
+      (total, leg) => total + leg.waitingBeforeMinutes,
+      0,
+    )
+
+    return {
+      status: 'found',
+      calculatedAt,
+      optimization: parameters.optimization,
+      startNodeId,
+      endNodeId,
+      requestedDeparture: requestedDeparture.value,
+      arrival: label.option.arrival,
+      legs,
+      summary: {
+        totalCost: label.totalCost,
+        totalTravelMinutes,
+        totalWaitingMinutes,
+        totalDurationMinutes:
+          (label.option.arrival.epochMilliseconds -
+            startMilliseconds) /
+          60_000,
+        legCount: legs.length,
+      },
+      diagnostics,
+    }
+  })
 
   return {
     status: 'found',
-    calculatedAt: new Date().toISOString(),
+    calculatedAt,
     optimization: parameters.optimization,
-    startNodeId,
-    endNodeId,
-    requestedDeparture: requestedDeparture.value,
-    arrival: bestFinal.option.arrival,
-    legs,
-    summary: {
-      totalCost: bestFinal.totalCost,
-      totalTravelMinutes,
-      totalWaitingMinutes,
-      totalDurationMinutes:
-        (bestFinal.option.arrival.epochMilliseconds - startMilliseconds) /
-        60_000,
-      legCount: legs.length,
-    },
+    routes,
     diagnostics,
   }
 }

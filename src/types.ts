@@ -217,6 +217,14 @@ export interface FoundRoute {
   diagnostics: RouteDiagnostics
 }
 
+export interface FoundRoutes {
+  status: 'found'
+  calculatedAt: string
+  optimization: OptimizationMode
+  routes: FoundRoute[]
+  diagnostics: RouteDiagnostics
+}
+
 export interface MissingRoute {
   status: 'not-found'
   calculatedAt: string
@@ -231,7 +239,7 @@ export interface InvalidRouteRequest {
 }
 
 export type RouteCalculationResult =
-  | FoundRoute
+  | FoundRoutes
   | MissingRoute
   | InvalidRouteRequest
 
