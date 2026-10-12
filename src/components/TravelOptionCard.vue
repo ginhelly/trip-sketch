@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import MarkdownIt from 'markdown-it'
-import DOMPurify from 'dompurify'
+
+import MarkdownNotes from './MarkdownNotes.vue'
 
 import {
   formatDuration,
@@ -32,33 +32,6 @@ const emit = defineEmits<{
 type TimeField = 'departure' | 'arrival'
 
 const timeFields: TimeField[] = ['departure', 'arrival']
-
-const markdown = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-})
-
-const defaultLinkRenderer = markdown.renderer.rules.link_open
-
-markdown.renderer.rules.link_open = (
-  tokens,
-  index,
-  options,
-  env,
-  renderer,
-) => {
-  const token = tokens[index]
-
-  if (token) {
-    token.attrSet('target', '_blank')
-    token.attrSet('rel', 'noopener noreferrer')
-  }
-
-  return defaultLinkRenderer
-    ? defaultLinkRenderer(tokens, index, options, env, renderer)
-    : renderer.renderToken(tokens, index, options)
-}
 
 const validation = computed(() =>
   validateTravelOption(
@@ -92,15 +65,6 @@ const duration = computed(() => {
   )
 })
 
-const previewHtml = computed(() =>
-  DOMPurify.sanitize(
-    markdown.render(props.option.descriptionMarkdown),
-    {
-      ADD_ATTR: ['target', 'rel'],
-    },
-  ),
-)
-
 function updateOption(patch: Partial<TravelOption>): void {
   emit('update:option', {
     ...props.option,
@@ -119,10 +83,6 @@ function inputValue(event: Event): string {
 
 function updateName(event: Event): void {
   updateOption({ name: inputValue(event) })
-}
-
-function updateDescription(event: Event): void {
-  updateOption({ descriptionMarkdown: inputValue(event) })
 }
 
 function updateEnabled(event: Event): void {
@@ -155,8 +115,26 @@ function updateLocalDateTime(
   field: TimeField,
   event: Event,
 ): void {
+  const value = inputValue(event)
+
+  if (field === 'departure' && value) {
+    const previous = props.option.departure.localDateTime
+    const arrival = props.option.arrival.localDateTime
+
+    // Прибытие подставляется только пока оно пустое или совпадает
+    // с прежним отправлением, то есть пользователь его не правил.
+    // Дата та же; время пользователь поправит сам.
+    if (!arrival || arrival === previous) {
+      updateOption({
+        departure: { ...props.option.departure, localDateTime: value },
+        arrival: { ...props.option.arrival, localDateTime: value },
+      })
+      return
+    }
+  }
+
   updateTime(field, {
-    localDateTime: inputValue(event),
+    localDateTime: value,
   })
 }
 
@@ -191,9 +169,20 @@ function updateDisambiguation(
 function timeHint(value: ZonedDateTimeInput): string {
   const result = resolveZonedDateTime(value)
 
-  return result.ok
-    ? `UTC${result.value.offset} · ${result.value.instantIso}`
-    : result.issues.map((issue) => issue.message).join(' ')
+  return result.ok ? `UTC${result.value.offset}` : ''
+}
+
+// Выбор смещения показывается, только когда он нужен:
+// время неоднозначно или выбор уже сделан.
+function needsDisambiguation(field: TimeField): boolean {
+  return (
+    props.option[field].disambiguation !== 'reject' ||
+    issues.value.some(
+      (issue) =>
+        issue.code === 'ambiguous-date-time' &&
+        issue.field?.includes(`.${field}.`),
+    )
+  )
 }
 </script>
 
@@ -202,86 +191,95 @@ function timeHint(value: ZonedDateTimeInput): string {
     class="option-card"
     :class="{ 'is-disabled': !option.enabled }"
   >
-    <div class="option-card-header">
-      <label class="checkbox-label">
+    <div class="opt-head">
+      <input
+        type="checkbox"
+        :checked="option.enabled"
+        title="Использовать в расчёте"
+        aria-label="Использовать в расчёте"
+        @change="updateEnabled"
+      />
+
+      <input
+        class="opt-name"
+        :value="option.name"
+        placeholder="Название, например электричка 07:40"
+        aria-label="Название"
+        @input="updateName"
+      />
+
+      <label class="opt-cost">
         <input
-          type="checkbox"
-          :checked="option.enabled"
-          @change="updateEnabled"
+          :value="Number.isFinite(option.cost) ? option.cost : ''"
+          type="number"
+          min="0"
+          step="any"
+          aria-label="Стоимость, у.е."
+          @input="updateCost"
         />
-        Использовать в расчёте
+        <span>у.е.</span>
       </label>
 
       <button
         type="button"
-        class="small-button"
-        title="Дублировать вариант проезда"
+        class="icon-button"
+        title="Дублировать вариант"
+        aria-label="Дублировать вариант"
         @click="emit('duplicate', option)"
       >
-        Копия
+        ⧉
+      </button>
+
+      <button
+        type="button"
+        class="icon-button danger"
+        title="Удалить вариант"
+        aria-label="Удалить вариант"
+        @click="emit('delete', option.id)"
+      >
+        ✕
       </button>
     </div>
 
-    <label>
-      Название
-      <input
-        :value="option.name"
-        placeholder="Например, электричка 07:40"
-        @input="updateName"
-      />
-    </label>
+    <div class="opt-times">
+      <div
+        v-for="field in timeFields"
+        :key="field"
+        class="opt-time"
+      >
+        <div class="opt-time-title">
+          {{ field === 'departure' ? 'Отправление' : 'Прибытие' }}
+          <span class="muted">{{ timeHint(option[field]) }}</span>
+        </div>
 
-    <label>
-      Стоимость, у.е.
-      <input
-        :value="Number.isFinite(option.cost) ? option.cost : ''"
-        type="number"
-        min="0"
-        step="any"
-        @input="updateCost"
-      />
-    </label>
-
-    <fieldset
-      v-for="field in timeFields"
-      :key="field"
-      class="time-fieldset"
-    >
-      <legend>
-        {{ field === 'departure' ? 'Отправление' : 'Прибытие' }}
-      </legend>
-
-      <label>
-        Дата и местное время
         <input
           :value="option[field].localDateTime"
           type="datetime-local"
           step="60"
+          :aria-label="
+            field === 'departure'
+              ? 'Дата и время отправления'
+              : 'Дата и время прибытия'
+          "
           @input="updateLocalDateTime(field, $event)"
         />
-      </label>
 
-      <label>
-        Таймзона
         <input
           :value="option[field].timeZone"
           list="time-zone-list"
-          placeholder="Например, Asia/Yekaterinburg"
+          placeholder="Таймзона, например Asia/Yekaterinburg"
+          aria-label="Таймзона"
           @input="updateTimeZone(field, $event)"
         />
-      </label>
-
-      <details class="advanced-settings">
-        <summary>
-          Смещение при переводе часов
-        </summary>
 
         <select
+          v-if="needsDisambiguation(field)"
           :value="option[field].disambiguation"
+          aria-label="Смещение при переводе часов"
           @change="updateDisambiguation(field, $event)"
         >
           <option value="reject">
-            Запросить при неоднозначности
+            Время неоднозначно: выберите смещение
           </option>
           <option value="earlier">
             Раннее смещение
@@ -290,44 +288,20 @@ function timeHint(value: ZonedDateTimeInput): string {
             Позднее смещение
           </option>
         </select>
-      </details>
-
-      <div class="muted time-hint">
-        {{ timeHint(option[field]) }}
       </div>
-    </fieldset>
-
-    <div class="muted">
-      Продолжительность: {{ duration }}
     </div>
 
-    <label>
-      Заметки и ссылки — Markdown
-      <textarea
-        :value="option.descriptionMarkdown"
-        rows="5"
-        placeholder="[Билеты](https://...)"
-        @input="updateDescription"
-      />
-    </label>
+    <div class="opt-meta muted">
+      В пути: {{ duration }}
+      <template v-if="!option.enabled">
+        · исключён из расчёта
+      </template>
+    </div>
 
-    <details
-      v-if="option.descriptionMarkdown"
-      class="advanced-settings"
-    >
-      <summary>
-        Предпросмотр заметок
-      </summary>
-
-      <div
-        class="markdown-content"
-        v-html="previewHtml"
-      />
-    </details>
-
-    <p v-if="!option.enabled" class="muted">
-      Этот вариант сохранён, но исключён из расчёта.
-    </p>
+    <MarkdownNotes
+      :model-value="option.descriptionMarkdown"
+      @update:model-value="updateOption({ descriptionMarkdown: $event })"
+    />
 
     <ul v-if="issues.length" class="error-list">
       <li
@@ -337,13 +311,5 @@ function timeHint(value: ZonedDateTimeInput): string {
         {{ issue.message }}
       </li>
     </ul>
-
-    <button
-      type="button"
-      class="danger full-width"
-      @click="emit('delete', option.id)"
-    >
-      Удалить вариант
-    </button>
   </article>
 </template>

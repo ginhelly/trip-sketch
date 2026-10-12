@@ -1,3 +1,5 @@
+import { computeStayCharge } from './layover'
+
 import {
   resolveZonedDateTime,
   validateTravelOption,
@@ -12,6 +14,7 @@ import type {
   RouteDiagnostics,
   RouteLeg,
   RouteSearchParameters,
+  StayCharge,
   TripEdge,
   TripNode,
   TripProject,
@@ -22,6 +25,8 @@ const MAX_ROUTES = 3
 
 interface RouteLabel {
   option: ResolvedTravelOption
+  /** Плата за долгую пересадку перед этим рейсом. */
+  stay: StayCharge | null
   totalCost: number
   legCount: number
   previous: RouteLabel | null
@@ -122,10 +127,13 @@ function collectOptions(
 function createLabel(
   option: ResolvedTravelOption,
   previous: RouteLabel | null,
+  stay: StayCharge | null = null,
 ): RouteLabel {
   return {
     option,
-    totalCost: (previous?.totalCost ?? 0) + option.cost,
+    stay,
+    totalCost:
+      (previous?.totalCost ?? 0) + (stay?.cost ?? 0) + option.cost,
     legCount: (previous?.legCount ?? 0) + 1,
     previous,
     pathKey:
@@ -188,11 +196,11 @@ function reconstructLegs(
   finalLabel: RouteLabel,
   startMilliseconds: number,
 ): RouteLeg[] {
-  const chain: ResolvedTravelOption[] = []
+  const chain: RouteLabel[] = []
   let current: RouteLabel | null = finalLabel
 
   while (current !== null) {
-    chain.push(current.option)
+    chain.push(current)
     current = current.previous
   }
 
@@ -200,7 +208,7 @@ function reconstructLegs(
 
   let previousArrival = startMilliseconds
 
-  return chain.map((option): RouteLeg => {
+  return chain.map(({ option, stay }): RouteLeg => {
     const departure = option.departure.epochMilliseconds
     const arrival = option.arrival.epochMilliseconds
 
@@ -216,6 +224,7 @@ function reconstructLegs(
       travelMinutes: (arrival - departure) / 60_000,
       waitingBeforeMinutes:
         (departure - previousArrival) / 60_000,
+      ...(stay ? { stayBefore: stay } : {}),
     }
 
     previousArrival = arrival
@@ -384,9 +393,9 @@ export function calculateRoute(
       candidates.push(createLabel(option, null))
     }
 
+    const fromNode = nodeMap.get(option.fromNodeId)!
     const transferMilliseconds =
-      nodeMap.get(option.fromNodeId)!.minimumTransferMinutes *
-      60_000
+      fromNode.minimumTransferMinutes * 60_000
 
     const previousLabels =
       labelsByArrivalNode.get(option.fromNodeId) ?? []
@@ -398,7 +407,14 @@ export function calculateRoute(
 
       if (readyAt > departure) continue
 
-      candidates.push(createLabel(option, previous))
+      const stay = computeStayCharge(
+        fromNode.layover,
+        previous.option.arrival.epochMilliseconds,
+        departure,
+        fromNode.timeZone ?? previous.option.arrival.timeZone,
+      )
+
+      candidates.push(createLabel(option, previous, stay))
     }
 
     if (candidates.length === 0) continue

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import type {
   DstDisambiguation,
   OptimizationMode,
@@ -17,6 +19,25 @@ const emit = defineEmits<{
   'start-change': []
   calculate: []
 }>()
+
+const blockedReason = computed(() => {
+  const p = props.parameters
+
+  if (props.nodes.length === 0) return ''
+  if (!p.startNodeId) return 'Выберите начальную точку.'
+  if (!p.endNodeId) return 'Выберите конечную точку.'
+  if (p.startNodeId === p.endNodeId) {
+    return 'Начальная и конечная точки совпадают.'
+  }
+  if (!p.earliestDeparture.localDateTime) {
+    return 'Укажите время, не раньше которого можно отправляться.'
+  }
+  if (!p.earliestDeparture.timeZone.trim()) {
+    return 'Укажите таймзону старта.'
+  }
+
+  return ''
+})
 
 function inputValue(event: Event): string {
   return (
@@ -202,10 +223,14 @@ function updateOptimization(event: Event): void {
         Сначала добавьте точки на карту или через поиск.
       </p>
 
+      <p v-if="blockedReason" class="disabled-reason">
+        {{ blockedReason }}
+      </p>
+
       <button
         type="submit"
         class="primary full-width"
-        :disabled="nodes.length === 0"
+        :disabled="nodes.length === 0 || blockedReason !== ''"
       >
         Рассчитать маршруты
       </button>

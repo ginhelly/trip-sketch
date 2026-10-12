@@ -30,6 +30,10 @@ const visible = computed(() => props.open && props.node !== null)
 let previousFocus: HTMLElement | null = null
 let previousBodyOverflow: string | null = null
 
+// Закрываем по клику на фон, только если нажатие тоже началось на фоне:
+// выделение текста в поле с выходом курсора за диалог не должно его закрывать.
+const backdropPressed = ref(false)
+
 function close(): void {
   emit('update:open', false)
 }
@@ -146,7 +150,8 @@ onBeforeUnmount(deactivateDialog)
     <div
       v-if="visible && node"
       class="modal-backdrop"
-      @click.self="close"
+      @pointerdown="backdropPressed = $event.target === $event.currentTarget"
+      @click.self="backdropPressed && close()"
     >
       <div
         ref="dialog"
@@ -173,14 +178,26 @@ onBeforeUnmount(deactivateDialog)
             </div>
           </div>
 
-          <button
-            ref="closeButton"
-            type="button"
-            aria-label="Закрыть редактор точки"
-            @click="close"
-          >
-            Закрыть ×
-          </button>
+          <div class="node-dialog-actions">
+            <button
+              type="button"
+              class="icon-button danger"
+              title="Удалить точку"
+              aria-label="Удалить точку"
+              @click="emit('delete-node', node.id)"
+            >
+              ✕ Точка
+            </button>
+
+            <button
+              ref="closeButton"
+              type="button"
+              aria-label="Закрыть редактор точки"
+              @click="close"
+            >
+              Закрыть
+            </button>
+          </div>
         </header>
 
         <div class="node-dialog-body">
@@ -193,7 +210,6 @@ onBeforeUnmount(deactivateDialog)
             @lookup-place="emit('lookup-place')"
             @set-start="emit('set-start', $event)"
             @set-end="emit('set-end', $event)"
-            @delete="emit('delete-node', $event)"
           />
         </div>
       </div>
@@ -205,7 +221,7 @@ onBeforeUnmount(deactivateDialog)
 .node-dialog {
   display: flex;
   flex-direction: column;
-  width: min(560px, 100%);
+  width: min(1000px, 100%);
   max-height: calc(100dvh - 48px);
   overflow: hidden;
   border: 1px solid #405574;
@@ -229,8 +245,11 @@ onBeforeUnmount(deactivateDialog)
   margin: 0 0 4px;
 }
 
-.node-dialog-header > button {
+.node-dialog-actions {
+  display: flex;
   flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .node-dialog-body {

@@ -1,9 +1,12 @@
+import { createDefaultLayover } from './layover'
+
 import type {
   BasemapSettings,
   DstDisambiguation,
   TripEdge,
   TripNode,
   TripProject,
+  StayOption,
   TravelOption,
   ValidationIssue,
   ValidationResult,
@@ -55,7 +58,7 @@ export function createEmptyProject(name = 'Новая поездка'): TripProj
   const now = new Date().toISOString()
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: createId(),
     name,
     createdAt: now,
@@ -82,9 +85,30 @@ export function createEmptyProject(name = 'Новая поездка'): TripProj
   }
 }
 
+/**
+ * Приводит проект версии 1 к версии 2: у точек появляется
+ * обычный режим пересадки без вариантов проживания.
+ */
+function migrateProject(input: unknown): unknown {
+  if (!isObject(input) || input.schemaVersion !== 1) return input
+
+  return {
+    ...input,
+    schemaVersion: 2,
+    nodes: Array.isArray(input.nodes)
+      ? input.nodes.map((node: unknown) =>
+          isObject(node)
+            ? { ...node, layover: createDefaultLayover() }
+            : node,
+        )
+      : input.nodes,
+  }
+}
+
 export function validateProject(
-  input: unknown,
+  rawInput: unknown,
 ): ValidationResult<TripProject> {
+  const input = migrateProject(rawInput)
   const issues: ValidationIssue[] = []
 
   function issue(field: string, message: string): void {
@@ -162,6 +186,64 @@ export function validateProject(
     }
   }
 
+  function layover(value: unknown, path: string): void {
+    if (!isObject(value)) {
+      issue(path, 'Ожидается объект пересадки.')
+      return
+    }
+
+    check(
+      value.mode === 'regular' || value.mode === 'extended',
+      `${path}.mode`,
+      'Допустимые значения: regular, extended.',
+    )
+
+    if (!Array.isArray(value.options)) {
+      issue(`${path}.options`, 'Ожидается массив вариантов проживания.')
+      return
+    }
+
+    value.options.forEach((option: unknown, index: number) => {
+      const optionPath = `${path}.options[${index}]`
+
+      if (!isObject(option)) {
+        issue(optionPath, 'Ожидается объект варианта проживания.')
+        return
+      }
+
+      text(option, 'id', optionPath, true)
+      text(option, 'name', optionPath)
+      text(option, 'descriptionMarkdown', optionPath)
+
+      if (isNonEmptyString(option.id)) {
+        check(
+          !stayIds.has(option.id),
+          `${optionPath}.id`,
+          'Повторяющийся ID варианта проживания.',
+        )
+        stayIds.add(option.id)
+      }
+
+      check(
+        option.pricing === 'per-night' || option.pricing === 'per-hour',
+        `${optionPath}.pricing`,
+        'Допустимые значения: per-night, per-hour.',
+      )
+
+      check(
+        isNonNegativeNumber(option.rate),
+        `${optionPath}.rate`,
+        'Ставка должна быть неотрицательным числом.',
+      )
+
+      check(
+        typeof option.enabled === 'boolean',
+        `${optionPath}.enabled`,
+        'Ожидается логическое значение.',
+      )
+    })
+  }
+
   if (!isObject(input)) {
     return {
       ok: false,
@@ -175,9 +257,9 @@ export function validateProject(
   }
 
   check(
-    input.schemaVersion === 1,
+    input.schemaVersion === 2,
     'schemaVersion',
-    'Неподдерживаемая версия проекта. Ожидается версия 1.',
+    'Неподдерживаемая версия проекта. Поддерживаются версии 1 и 2.',
   )
 
   text(input, 'id', 'project', true)
@@ -198,6 +280,7 @@ export function validateProject(
   const nodeIds = new Set<string>()
   const edgeIds = new Set<string>()
   const optionIds = new Set<string>()
+  const stayIds = new Set<string>()
   const directedPairs = new Set<string>()
 
   if (!Array.isArray(input.nodes)) {
@@ -242,6 +325,8 @@ export function validateProject(
         `${path}.minimumTransferMinutes`,
         'Время пересадки должно быть неотрицательным числом.',
       )
+
+      layover(value.layover, `${path}.layover`)
     })
   }
 
@@ -454,6 +539,17 @@ export function validateProject(
     timeZone: node.timeZone,
     timeZoneSource: node.timeZoneSource,
     minimumTransferMinutes: node.minimumTransferMinutes,
+    layover: {
+      mode: node.layover.mode,
+      options: node.layover.options.map((option): StayOption => ({
+        id: option.id,
+        name: option.name,
+        descriptionMarkdown: option.descriptionMarkdown,
+        pricing: option.pricing,
+        rate: option.rate,
+        enabled: option.enabled,
+      })),
+    },
   }))
 
   function copyDateTime(value: ZonedDateTimeInput): ZonedDateTimeInput {
@@ -497,7 +593,7 @@ export function validateProject(
   return {
     ok: true,
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: validated.id,
       name: validated.name,
       createdAt: validated.createdAt,

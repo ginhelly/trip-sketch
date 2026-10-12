@@ -9,6 +9,7 @@ import {
 import type {
   FoundRoute,
   RouteCalculationResult,
+  StayCharge,
   TripNode,
 } from '../types'
 
@@ -58,6 +59,15 @@ function routePath(route: FoundRoute): string {
     nodeName(route.startNodeId),
     ...route.legs.map((leg) => nodeName(leg.toNodeId)),
   ].join(' → ')
+}
+
+function stayText(stay: StayCharge): string {
+  const units =
+    stay.pricing === 'per-night'
+      ? `${stay.units} ноч.`
+      : `${stay.units} ч`
+
+  return `${stay.optionName || 'Вариант без названия'}, ${units}`
 }
 
 function formatCost(cost: number): string {
@@ -213,6 +223,13 @@ function formatCost(cost: number): string {
             {{ nodeName(leg.fromNodeId) }}
             → {{ nodeName(leg.toNodeId) }}
           </button>
+
+          <div v-if="leg.stayBefore" class="muted">
+            Пребывание в {{ nodeName(leg.fromNodeId) }}
+            ({{ formatDuration(leg.stayBefore.minutes) }}):
+            {{ stayText(leg.stayBefore) }},
+            {{ formatCost(leg.stayBefore.cost) }}
+          </div>
 
           <div>{{ leg.optionName }}</div>
           <div>{{ formatCost(leg.cost) }}</div>

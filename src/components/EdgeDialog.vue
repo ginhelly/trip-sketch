@@ -50,6 +50,10 @@ const title = computed(() => {
   }`
 })
 
+// Закрываем по клику на фон, только если нажатие тоже началось на фоне:
+// выделение текста в поле с выходом курсора за диалог не должно его закрывать.
+const backdropPressed = ref(false)
+
 function close(): void {
   emit('update:open', false)
 }
@@ -170,7 +174,8 @@ onBeforeUnmount(deactivateDialog)
     <div
       v-if="visible && edge"
       class="modal-backdrop"
-      @click.self="close"
+      @pointerdown="backdropPressed = $event.target === $event.currentTarget"
+      @click.self="backdropPressed && close()"
     >
       <div
         ref="dialog"
@@ -197,57 +202,59 @@ onBeforeUnmount(deactivateDialog)
             </div>
           </div>
 
-          <button
-            ref="closeButton"
-            type="button"
-            aria-label="Закрыть редактор связи"
-            @click="close"
-          >
-            Закрыть ×
-          </button>
+          <div class="edge-dialog-actions">
+            <button
+              type="button"
+              class="icon-button danger"
+              title="Удалить связь целиком"
+              aria-label="Удалить связь целиком"
+              @click="emit('delete-edge')"
+            >
+              ✕ Связь
+            </button>
+
+            <button
+              ref="closeButton"
+              type="button"
+              aria-label="Закрыть редактор связи"
+              @click="close"
+            >
+              Закрыть
+            </button>
+          </div>
         </header>
 
         <div class="edge-dialog-body">
           <section class="panel">
-            <p class="muted">
-              Только это направление.
-              Обратная связь создаётся отдельно.
-            </p>
+            <div class="edge-toolbar">
+              <p class="muted">
+                Только это направление. Обратная связь создаётся отдельно.
+                <template v-if="edge.options.length === 0">
+                  Пока нет вариантов, пустая связь не участвует в расчёте.
+                </template>
+              </p>
 
-            <button
-              type="button"
-              class="primary full-width"
-              @click="emit('add-option')"
-            >
-              + Вариант проезда
-            </button>
+              <button
+                type="button"
+                class="primary"
+                @click="emit('add-option')"
+              >
+                + Вариант проезда
+              </button>
+            </div>
 
-            <p
-              v-if="edge.options.length === 0"
-              class="muted"
-            >
-              Пока нет вариантов.
-              Пустая связь не участвует в расчёте.
-            </p>
-
-            <TravelOptionCard
-              v-for="option in edge.options"
-              :key="option.id"
-              :option="option"
-              :edge="edge"
-              :nodes="nodes"
-              @update:option="emit('update-option', $event)"
-              @duplicate="emit('duplicate-option', $event)"
-              @delete="emit('delete-option', $event)"
-            />
-
-            <button
-              type="button"
-              class="danger full-width"
-              @click="emit('delete-edge')"
-            >
-              Удалить связь целиком
-            </button>
+            <div class="option-grid">
+              <TravelOptionCard
+                v-for="option in edge.options"
+                :key="option.id"
+                :option="option"
+                :edge="edge"
+                :nodes="nodes"
+                @update:option="emit('update-option', $event)"
+                @duplicate="emit('duplicate-option', $event)"
+                @delete="emit('delete-option', $event)"
+              />
+            </div>
           </section>
         </div>
       </div>

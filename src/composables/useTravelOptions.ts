@@ -18,6 +18,24 @@ export interface UseTravelOptionsOptions {
 export function useTravelOptions(options: UseTravelOptionsOptions) {
   const { project, selectedEdge, confirm } = options
 
+  // Последнее введённое локальное отправление: новый вариант
+  // начинается с него, чтобы не вводить дату с нуля.
+  let lastDeparture = ''
+
+  function lastKnownDeparture(): string {
+    if (lastDeparture) return lastDeparture
+
+    for (const edge of [...project.value.edges].reverse()) {
+      for (const option of [...edge.options].reverse()) {
+        if (option.departure.localDateTime) {
+          return option.departure.localDateTime
+        }
+      }
+    }
+
+    return ''
+  }
+
   function updateTravelOption(option: TravelOption): void {
     const edge = selectedEdge.value
     if (!edge) return
@@ -27,6 +45,10 @@ export function useTravelOptions(options: UseTravelOptionsOptions) {
     )
 
     if (index === -1) return
+
+    if (option.departure.localDateTime) {
+      lastDeparture = option.departure.localDateTime
+    }
 
     edge.options.splice(index, 1, option)
   }
@@ -43,18 +65,20 @@ export function useTravelOptions(options: UseTravelOptionsOptions) {
       (node) => node.id === edge.toNodeId,
     )
 
+    const previous = lastKnownDeparture()
+
     edge.options.push({
       id: createId(),
       name: '',
       descriptionMarkdown: '',
       cost: 0,
       departure: {
-        localDateTime: '',
+        localDateTime: previous,
         timeZone: from?.timeZone ?? '',
         disambiguation: 'reject',
       },
       arrival: {
-        localDateTime: '',
+        localDateTime: previous,
         timeZone: to?.timeZone ?? '',
         disambiguation: 'reject',
       },

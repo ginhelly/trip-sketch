@@ -15,6 +15,25 @@ export interface Coordinates {
   lat: number
 }
 
+export type LayoverMode = 'regular' | 'extended'
+
+export type StayPricing = 'per-night' | 'per-hour'
+
+export interface StayOption {
+  id: string
+  name: string
+  descriptionMarkdown: string
+  pricing: StayPricing
+  /** Стоимость за одну ночь или за один час, у.е. */
+  rate: number
+  enabled: boolean
+}
+
+export interface NodeLayover {
+  mode: LayoverMode
+  options: StayOption[]
+}
+
 export interface TripNode {
   id: NodeId
   name: string
@@ -24,6 +43,7 @@ export interface TripNode {
   timeZone: string | null
   timeZoneSource: TimeZoneSource
   minimumTransferMinutes: number
+  layover: NodeLayover
 }
 
 export interface ZonedDateTimeInput {
@@ -82,7 +102,7 @@ export type BasemapSettings =
     }
 
 export interface TripProject {
-  schemaVersion: 1
+  schemaVersion: 2
   id: string
   name: string
   createdAt: string
@@ -160,6 +180,18 @@ export interface ResolvedTravelOption {
   arrival: ResolvedZonedDateTime
 }
 
+export interface StayCharge {
+  optionId: string
+  optionName: string
+  pricing: StayPricing
+  rate: number
+  /** Ночи (за ночь) или оплаченные часы (за час). */
+  units: number
+  cost: number
+  /** Фактическое пребывание в точке перед следующим рейсом. */
+  minutes: number
+}
+
 export interface RouteLeg {
   edgeId: EdgeId
   optionId: TravelOptionId
@@ -177,6 +209,9 @@ export interface RouteLeg {
    * включая необходимое время пересадки.
    */
   waitingBeforeMinutes: number
+
+  /** Плата за долгую пересадку в точке отправления этого рейса. */
+  stayBefore?: StayCharge
 }
 
 export interface RouteSummary {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import TripMap from './components/TripMap.vue'
 import RouteResults from './components/RouteResults.vue'
@@ -8,6 +8,7 @@ import NodeDialog from './components/NodeDialog.vue'
 import RouteSearchPanel from './components/RouteSearchPanel.vue'
 import EdgeSummary from './components/EdgeSummary.vue'
 import ProjectToolbar from './components/ProjectToolbar.vue'
+import HistoryPanel from './components/HistoryPanel.vue'
 
 import { useRouting } from './composables/useRouting'
 import { useProject } from './composables/useProject'
@@ -15,8 +16,10 @@ import { useGeocoding } from './composables/useGeocoding'
 import { useRouteSearchParams } from './composables/useRouteSearchParams'
 import { useTravelOptions } from './composables/useTravelOptions'
 import { useProjectFile } from './composables/useProjectFile'
+import { useHistory } from './composables/useHistory'
 
 import { createId } from './storage'
+import { createDefaultLayover } from './layover'
 import { getSuggestedTimeZones } from './services'
 
 import type {
@@ -57,6 +60,20 @@ function notify(message: string): void {
   notice.value = message
 }
 
+const NOTICE_TIMEOUT_MS = 8000
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+
+watch(notice, (message) => {
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
+  noticeTimer = undefined
+
+  if (message) {
+    noticeTimer = setTimeout(() => {
+      notice.value = ''
+    }, NOTICE_TIMEOUT_MS)
+  }
+})
+
 function confirmAction(message: string): boolean {
   return window.confirm(message)
 }
@@ -85,8 +102,57 @@ const {
   onNodeTimeZoneDetected: handleNodeTimeZoneDetected,
 })
 
+const sidebarTab = ref<'route' | 'history'>('route')
+
+const {
+  entries: historyEntries,
+  currentIndex: historyIndex,
+  canUndo,
+  canRedo,
+  undo,
+  redo,
+  jumpTo: jumpToHistory,
+  reset: resetHistory,
+  beginGroup: beginHistoryGroup,
+  endGroup: endHistoryGroup,
+} = useHistory({
+  project,
+  onRestore: (entry) => {
+    pendingFromNodeId.value = null
+    notify(`Состояние: ${entry.label}`)
+  },
+})
+
 const edgeDialogOpen = ref(false)
 const nodeDialogOpen = ref(false)
+
+// Всё, что изменено за одно открытие диалога, попадает в один пункт истории.
+watch(
+  () => nodeDialogOpen.value || edgeDialogOpen.value,
+  (open) => {
+    if (!open) {
+      endHistoryGroup()
+      return
+    }
+
+    beginHistoryGroup(() => {
+      const node = selectedNode.value
+
+      if (nodeDialogOpen.value && node) {
+        return `Изменена точка «${node.name}»`
+      }
+
+      const edge = selectedEdge.value
+      const name = (id: string): string =>
+        project.value.nodes.find((item) => item.id === id)?.name ?? '?'
+
+      return edge
+        ? `Изменена связь ${name(edge.fromNodeId)} → ${name(edge.toNodeId)}`
+        : 'Изменения в диалоге'
+    })
+  },
+  { flush: 'post' },
+)
 
 const timeZones = getSuggestedTimeZones()
 
@@ -126,6 +192,34 @@ const {
   notify,
   confirm: confirmAction,
   replaceProject,
+})
+
+const modeHint = computed(() => {
+  if (mode.value === 'add-node') {
+    return 'Щёлкните по карте, чтобы поставить точку.'
+  }
+
+  if (mode.value === 'add-edge') {
+    return pendingFromNodeId.value === null
+      ? 'Выберите начальную точку связи.'
+      : 'Теперь выберите конечную точку связи.'
+  }
+
+  return ''
+})
+
+function handleEscape(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || mode.value === 'select') return
+  if (nodeDialogOpen.value || edgeDialogOpen.value) return
+
+  setMode('select')
+}
+
+onMounted(() => window.addEventListener('keydown', handleEscape))
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleEscape)
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
 
 function setMode(next: EditorMode): void {
@@ -254,6 +348,7 @@ function createNode(
     timeZone: null,
     timeZoneSource: 'unknown',
     minimumTransferMinutes: 0,
+    layover: createDefaultLayover(),
   }
 }
 
@@ -405,6 +500,7 @@ function replaceProject(next: TripProject): void {
   resetForNewProject()
 
   replaceStoredProject(next)
+  resetHistory()
 
   selection.value = { kind: 'none' }
   pendingFromNodeId.value = null
@@ -477,16 +573,28 @@ function autoDetectSelectedNodeTimeZone(): void {
           @camera-change="cameraChanged"
           @map-error="mapError = $event"
         />
-      </section>
 
-      <aside class="sidebar">
-        <div v-if="notice" class="notice">
-          <span>{{ notice }}</span>
-          <button class="small-button" @click="notice = ''">
-            ×
+        <div v-if="modeHint" class="mode-hint" role="status">
+          <span>{{ modeHint }}</span>
+          <button type="button" class="small-button" @click="setMode('select')">
+            Отмена (Esc)
           </button>
         </div>
 
+        <div v-if="notice" class="toast" role="status" aria-live="polite">
+          <span>{{ notice }}</span>
+          <button
+            type="button"
+            class="small-button"
+            aria-label="Закрыть уведомление"
+            @click="notice = ''"
+          >
+            ×
+          </button>
+        </div>
+      </section>
+
+      <aside class="sidebar">
         <details v-if="mapError" class="notice warning">
           <summary>Ошибка карты или подложки</summary>
           <p>{{ mapError }}</p>
@@ -501,6 +609,41 @@ function autoDetectSelectedNodeTimeZone(): void {
           импортируйте исправный JSON или создайте новый проект.
         </div>
 
+        <div class="sidebar-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="sidebarTab === 'route'"
+            :class="{ active: sidebarTab === 'route' }"
+            @click="sidebarTab = 'route'"
+          >
+            Маршрут
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="sidebarTab === 'history'"
+            :class="{ active: sidebarTab === 'history' }"
+            @click="sidebarTab = 'history'"
+          >
+            История
+            <span class="muted">{{ historyEntries.length - 1 }}</span>
+          </button>
+        </div>
+
+        <HistoryPanel
+          v-if="sidebarTab === 'history'"
+          :entries="historyEntries"
+          :current-index="historyIndex"
+          :can-undo="canUndo"
+          :can-redo="canRedo"
+          @undo="undo"
+          @redo="redo"
+          @jump="jumpToHistory"
+        />
+
+        <template v-else>
         <RouteSearchPanel
           v-model:parameters="project.routeSearch"
           :nodes="project.nodes"
@@ -596,6 +739,7 @@ function autoDetectSelectedNodeTimeZone(): void {
             </div>
           </details>
         </section>
+        </template>
       </aside>
     </main>
 
