@@ -13,6 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   edit: [edgeId: string]
+  delete: []
   close: []
 }>()
 
@@ -55,6 +56,14 @@ const enabledCount = computed(
       @click="emit('edit', edge.id)"
     >
       Редактировать
+    </button>
+
+    <button
+      type="button"
+      class="danger small-button"
+      @click="emit('delete')"
+    >
+      Удалить
     </button>
 
     <button

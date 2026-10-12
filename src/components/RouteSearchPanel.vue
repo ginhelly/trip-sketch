@@ -12,6 +12,7 @@ import type {
 const props = defineProps<{
   parameters: RouteSearchParameters
   nodes: TripNode[]
+  maxRoutes: number
 }>()
 
 const emit = defineEmits<{
@@ -211,10 +212,10 @@ function updateOptimization(event: Event): void {
           @change="updateOptimization"
         >
           <option value="cheapest">
-            Самые дешёвые — до 3 вариантов
+            Самые дешёвые — до {{ maxRoutes }} вариантов
           </option>
           <option value="earliest-arrival">
-            Самое раннее прибытие — до 3 вариантов
+            Самое раннее прибытие — до {{ maxRoutes }} вариантов
           </option>
         </select>
       </label>

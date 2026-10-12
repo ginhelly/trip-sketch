@@ -4,6 +4,9 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "types": ["vite/client"],
     "allowArbitraryExtensions": true,
+    "paths": {
+      "browser-geo-tz": ["./src/browser-geo-tz.d.ts"]
+    },
 
     /* Linting */
     "noUnusedLocals": true,

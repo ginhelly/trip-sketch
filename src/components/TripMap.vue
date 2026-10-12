@@ -37,6 +37,9 @@ const props = defineProps<{
   selection: MapSelection
   highlight: MapHighlight | null
   pendingFromNodeId: string | null
+  startNodeId: string | null
+  endNodeId: string | null
+  allowDragging: boolean
 }>()
 
 const emit = defineEmits<{
@@ -314,7 +317,7 @@ function createNodeMarker(
   const marker = new Marker({
     element,
     anchor: 'center',
-    draggable: props.mode === 'select',
+    draggable: props.mode === 'select' && props.allowDragging,
   })
     .setLngLat([node.coordinates.lng, node.coordinates.lat])
     .addTo(instance)
@@ -348,7 +351,7 @@ function updateNodes(instance: MapLibreMap): void {
     nodeMarkers.set(node.id, marker)
 
     marker.setLngLat([node.coordinates.lng, node.coordinates.lat])
-    marker.setDraggable(props.mode === 'select')
+    marker.setDraggable(props.mode === 'select' && props.allowDragging)
 
     const element = marker.getElement()
     const label = element.querySelector('.trip-node-label')
@@ -357,6 +360,18 @@ function updateNodes(instance: MapLibreMap): void {
 
     element.setAttribute('aria-label', `Точка: ${node.name}`)
     element.title = node.name
+
+    const isStart = props.startNodeId === node.id
+    const isEnd = props.endNodeId === node.id
+    const dot = element.querySelector('.trip-node-dot')
+
+    element.classList.toggle('is-start', isStart)
+    element.classList.toggle('is-end', isEnd)
+
+    // Начало и конец маршрута подписаны буквами на самой точке.
+    if (dot) {
+      dot.textContent = isStart && isEnd ? 'A/B' : isStart ? 'A' : isEnd ? 'B' : ''
+    }
 
     element.classList.toggle('is-selected', selectedNode(node.id))
     element.classList.toggle(
@@ -496,9 +511,10 @@ function updateCursor(): void {
   if (!map) return
 
   map.getCanvas().style.cursor =
-    props.mode === 'add-node'
+    props.mode === 'add-node' ||
+    (props.mode === 'add-node-edge' && props.pendingFromNodeId !== null)
       ? 'crosshair'
-      : props.mode === 'add-edge'
+      : props.mode === 'add-edge' || props.mode === 'add-node-edge'
         ? 'pointer'
         : ''
 }
@@ -606,6 +622,9 @@ watch(
     props.selection,
     props.highlight,
     props.pendingFromNodeId,
+    props.startNodeId,
+    props.endNodeId,
+    props.allowDragging,
     props.mode,
   ],
   refresh,
@@ -655,7 +674,7 @@ onMounted(() => {
     instance.on('click', (event) => {
       if (!ready) return
 
-      if (props.mode !== 'add-node') {
+      if (props.mode !== 'add-node' && props.mode !== 'add-node-edge') {
         const features = instance.queryRenderedFeatures(event.point, {
           layers: [HIT_LAYER_ID],
         })
@@ -744,8 +763,16 @@ onBeforeUnmount(() => {
         }}
       </template>
 
+      <template v-else-if="mode === 'add-node-edge'">
+        {{
+          pendingFromNodeId
+            ? 'Кликните по карте, где поставить новую точку'
+            : 'Выберите исходную точку'
+        }}
+      </template>
+
       <template v-else>
-        Клик — редактирование · Точки можно перетаскивать
+        Клик — редактирование{{ allowDragging ? ' · Точки можно перетаскивать' : '' }}
       </template>
     </div>
 
@@ -864,6 +891,57 @@ onBeforeUnmount(() => {
 :deep(.trip-node-marker.is-pending .trip-node-dot) {
   background: #f97316;
   box-shadow: 0 0 0 6px rgb(249 115 22 / 30%);
+}
+
+:deep(.trip-node-marker.is-start .trip-node-dot),
+:deep(.trip-node-marker.is-end .trip-node-dot) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  color: #ffffff;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+:deep(.trip-node-marker.is-start .trip-node-dot) {
+  background: #16a34a;
+}
+
+:deep(.trip-node-marker.is-end .trip-node-dot) {
+  background: #dc2626;
+}
+
+:deep(.trip-node-marker.is-start.is-end .trip-node-dot) {
+  width: 34px;
+  border-radius: 13px;
+  background: linear-gradient(90deg, #16a34a 50%, #dc2626 50%);
+}
+
+:deep(.trip-node-marker.is-start .trip-node-label) {
+  border-left: 3px solid #16a34a;
+}
+
+:deep(.trip-node-marker.is-end .trip-node-label) {
+  border-left: 3px solid #dc2626;
+}
+
+/* Выделение не перекрашивает начало и конец, а обводит их. */
+:deep(.trip-node-marker.is-start.is-selected .trip-node-dot),
+:deep(.trip-node-marker.is-end.is-selected .trip-node-dot) {
+  box-shadow: 0 0 0 4px rgb(245 158 11 / 70%);
+}
+
+:deep(.trip-node-marker.is-start.is-highlighted .trip-node-dot) {
+  background: #16a34a;
+}
+
+:deep(.trip-node-marker.is-end.is-highlighted .trip-node-dot) {
+  background: #dc2626;
 }
 
 :deep(.trip-node-marker.is-muted) {

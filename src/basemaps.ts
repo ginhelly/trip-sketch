@@ -1,3 +1,6 @@
+import { tileServiceProblem, tileServiceToBasemap } from './settings'
+
+import type { CustomTileService } from './settings'
 import type { BasemapSettings } from './types'
 
 export interface BasemapPreset {
@@ -42,28 +45,53 @@ export const BASEMAP_PRESETS: readonly BasemapPreset[] = [
       tileSize: 256,
       minZoom: 0,
       maxZoom: 20,
-    }
+    },
   },
 ]
 
 export const CUSTOM_BASEMAP_ID = 'custom'
 
-/** Определяет, какой пресет соответствует настройкам проекта. */
-export function basemapPresetId(basemap: BasemapSettings): string {
+const USER_PREFIX = 'user:'
+
+/** Все доступные подложки: встроенные и пользовательские. */
+export function basemapOptions(
+  custom: readonly CustomTileService[],
+): BasemapPreset[] {
+  const user = custom
+    .filter((service) => tileServiceProblem(service) === '')
+    .map(
+      (service): BasemapPreset => ({
+        id: USER_PREFIX + service.id,
+        label: service.name.trim(),
+        settings: tileServiceToBasemap(service),
+      }),
+    )
+
+  return [...BASEMAP_PRESETS, ...user]
+}
+
+/** Определяет, какой пункт списка соответствует настройкам проекта. */
+export function basemapPresetId(
+  basemap: BasemapSettings,
+  custom: readonly CustomTileService[] = [],
+): string {
   if (basemap.kind === 'default') return 'osm'
 
-  const preset = BASEMAP_PRESETS.find(
+  const match = basemapOptions(custom).find(
     (item) =>
       item.settings.kind === 'raster' &&
       item.settings.tileUrls[0] === basemap.tileUrls[0],
   )
 
-  return preset?.id ?? CUSTOM_BASEMAP_ID
+  return match?.id ?? CUSTOM_BASEMAP_ID
 }
 
-/** Независимая копия настроек пресета для записи в проект. */
-export function basemapFromPreset(id: string): BasemapSettings | null {
-  const preset = BASEMAP_PRESETS.find((item) => item.id === id)
+/** Независимая копия настроек пункта списка для записи в проект. */
+export function basemapFromPreset(
+  id: string,
+  custom: readonly CustomTileService[] = [],
+): BasemapSettings | null {
+  const preset = basemapOptions(custom).find((item) => item.id === id)
 
   return preset
     ? (JSON.parse(JSON.stringify(preset.settings)) as BasemapSettings)

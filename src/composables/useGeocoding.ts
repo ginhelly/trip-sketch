@@ -1,6 +1,8 @@
 import { onScopeDispose, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 
+import type { GeocoderProvider } from '../services'
+
 import {
   lookupTimeZones,
   reverseGeocode,
@@ -21,6 +23,8 @@ const MIN_QUERY_LENGTH = 2
 export interface UseGeocodingOptions {
   project: Ref<TripProject>
   notify: (message: string) => void
+  /** Какой геокодер использовать сейчас. */
+  provider?: () => GeocoderProvider
   /** Вызывается после автоматического определения таймзоны точки. */
   onNodeTimeZoneDetected?: (nodeId: NodeId) => void
 }
@@ -98,6 +102,7 @@ export function useGeocoding(options: UseGeocodingOptions) {
     try {
       const results = await reverseGeocode(coordinates, {
         signal: controller.signal,
+        provider: options.provider?.(),
       })
 
       if (isStale()) return
@@ -302,6 +307,7 @@ export function useGeocoding(options: UseGeocodingOptions) {
       try {
         const results = await searchPlaces(query, {
           signal: controller.signal,
+          provider: options.provider?.(),
           bias: project.value.camera.center,
         })
 

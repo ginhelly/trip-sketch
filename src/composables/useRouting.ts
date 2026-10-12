@@ -1,7 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 
-import { calculateRoute } from '../routing'
+import { DEFAULT_MAX_ROUTES, calculateRoute } from '../routing'
 
 import type {
   FoundRoute,
@@ -10,7 +10,10 @@ import type {
   TripProject,
 } from '../types'
 
-export function useRouting(project: Ref<TripProject>) {
+export function useRouting(
+  project: Ref<TripProject>,
+  maxRoutes: () => number = () => DEFAULT_MAX_ROUTES,
+) {
   const routeState = ref<RouteResultState>({
     result: null,
     stale: false,
@@ -75,7 +78,9 @@ export function useRouting(project: Ref<TripProject>) {
 
   function calculate(): void {
     routeState.value = {
-      result: calculateRoute(project.value),
+      result: calculateRoute(project.value, project.value.routeSearch, {
+        maxRoutes: maxRoutes(),
+      }),
       stale: false,
     }
   }

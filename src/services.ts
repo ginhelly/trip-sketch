@@ -16,12 +16,16 @@ import type {
 } from './types'
 
 const DEFAULT_PHOTON_URL = 'https://photon.komoot.io'
+const DEFAULT_NOMINATIM_URL = 'https://nominatim.openstreetmap.org'
 const REQUEST_TIMEOUT_MS = 12_000
 const MAX_CACHE_ENTRIES = 100
 
 const geocodingCache = new Map<string, GeocodingResult[]>()
 
+export type GeocoderProvider = 'photon' | 'nominatim'
+
 export interface GeocodingOptions {
+  provider?: GeocoderProvider
   baseUrl?: string
   signal?: AbortSignal
   limit?: number
@@ -335,7 +339,27 @@ export async function searchPlaces(
 
   if (trimmed.length < 2) return []
 
-  const url = createPhotonUrl('api/', options.baseUrl)
+  if (options.provider === 'nominatim') {
+    const url = createServiceUrl(DEFAULT_NOMINATIM_URL, 'search', options.baseUrl)
+    url.searchParams.set('q', trimmed)
+    url.searchParams.set('format', 'jsonv2')
+    url.searchParams.set('accept-language', 'ru,en')
+    url.searchParams.set('addressdetails', '1')
+    url.searchParams.set('limit', String(normalizeLimit(options.limit)))
+
+    if (options.bias && validCoordinates(options.bias)) {
+      // Подсказка: сначала результаты рядом с центром карты.
+      const { lng, lat } = options.bias
+      url.searchParams.set(
+        'viewbox',
+        `${lng - 2},${lat + 2},${lng + 2},${lat - 2}`,
+      )
+    }
+
+    return requestPlaces(url, options.signal, parseNominatimBody)
+  }
+
+  const url = createServiceUrl(DEFAULT_PHOTON_URL, 'api/', options.baseUrl)
   url.searchParams.set('q', trimmed)
   url.searchParams.set('limit', String(normalizeLimit(options.limit)))
 
@@ -344,7 +368,7 @@ export async function searchPlaces(
     url.searchParams.set('lat', String(options.bias.lat))
   }
 
-  return requestPlaces(url, options.signal)
+  return requestPlaces(url, options.signal, parsePhotonBody)
 }
 
 export async function reverseGeocode(
@@ -355,16 +379,31 @@ export async function reverseGeocode(
     throw new Error('Некорректные координаты точки.')
   }
 
-  const url = createPhotonUrl('reverse', options.baseUrl)
+  if (options.provider === 'nominatim') {
+    const url = createServiceUrl(DEFAULT_NOMINATIM_URL, 'reverse', options.baseUrl)
+    url.searchParams.set('lon', String(coordinates.lng))
+    url.searchParams.set('lat', String(coordinates.lat))
+    url.searchParams.set('format', 'jsonv2')
+    url.searchParams.set('accept-language', 'ru,en')
+    url.searchParams.set('addressdetails', '1')
+
+    return requestPlaces(url, options.signal, parseNominatimBody)
+  }
+
+  const url = createServiceUrl(DEFAULT_PHOTON_URL, 'reverse', options.baseUrl)
   url.searchParams.set('lon', String(coordinates.lng))
   url.searchParams.set('lat', String(coordinates.lat))
   url.searchParams.set('limit', String(normalizeLimit(options.limit ?? 3)))
 
-  return requestPlaces(url, options.signal)
+  return requestPlaces(url, options.signal, parsePhotonBody)
 }
 
-function createPhotonUrl(path: string, baseUrl?: string): URL {
-  const base = (baseUrl || DEFAULT_PHOTON_URL).replace(/\/+$/, '')
+function createServiceUrl(
+  defaultBase: string,
+  path: string,
+  baseUrl?: string,
+): URL {
+  const base = (baseUrl || defaultBase).replace(/\/+$/, '')
   const url = new URL(`${base}/${path}`)
 
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
@@ -399,7 +438,8 @@ function copyResults(results: GeocodingResult[]): GeocodingResult[] {
 
 async function requestPlaces(
   url: URL,
-  externalSignal?: AbortSignal,
+  externalSignal: AbortSignal | undefined,
+  parse: (body: unknown) => GeocodingResult[],
 ): Promise<GeocodingResult[]> {
   if (externalSignal?.aborted) {
     throw new DOMException('Запрос отменён.', 'AbortError')
@@ -437,27 +477,7 @@ async function requestPlaces(
     }
 
     const body: unknown = await response.json()
-
-    if (
-      typeof body !== 'object' ||
-      body === null ||
-      !('features' in body) ||
-      !Array.isArray(body.features)
-    ) {
-      throw new Error('Геокодер вернул неожиданный формат данных.')
-    }
-
-    const results: GeocodingResult[] = []
-    const seen = new Set<string>()
-
-    for (const feature of body.features) {
-      const result = parsePhotonFeature(feature)
-
-      if (result && !seen.has(result.id)) {
-        results.push(result)
-        seen.add(result.id)
-      }
-    }
+    const results = parse(body)
 
     if (geocodingCache.size >= MAX_CACHE_ENTRIES) {
       const oldestKey = geocodingCache.keys().next().value
@@ -485,6 +505,127 @@ async function requestPlaces(
   } finally {
     window.clearTimeout(timeout)
     externalSignal?.removeEventListener('abort', onAbort)
+  }
+}
+
+function parsePhotonBody(body: unknown): GeocodingResult[] {
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    !('features' in body) ||
+    !Array.isArray(body.features)
+  ) {
+    throw new Error('Геокодер вернул неожиданный формат данных.')
+  }
+
+  const results: GeocodingResult[] = []
+  const seen = new Set<string>()
+
+  for (const feature of body.features) {
+    const result = parsePhotonFeature(feature)
+
+    if (result && !seen.has(result.id)) {
+      results.push(result)
+      seen.add(result.id)
+    }
+  }
+
+  return results
+}
+
+/**
+ * Nominatim: поиск возвращает массив, обратное геокодирование — объект
+ * (или объект с полем error, если места нет).
+ */
+export function parseNominatimBody(body: unknown): GeocodingResult[] {
+  if (typeof body !== 'object' || body === null) {
+    throw new Error('Геокодер вернул неожиданный формат данных.')
+  }
+
+  if (!Array.isArray(body) && 'error' in body) return []
+
+  const items: unknown[] = Array.isArray(body) ? body : [body]
+  const results: GeocodingResult[] = []
+  const seen = new Set<string>()
+
+  for (const item of items) {
+    const result = parseNominatimItem(item)
+
+    if (result && !seen.has(result.id)) {
+      results.push(result)
+      seen.add(result.id)
+    }
+  }
+
+  return results
+}
+
+function parseNominatimItem(input: unknown): GeocodingResult | null {
+  if (typeof input !== 'object' || input === null) return null
+
+  const item = input as Record<string, unknown>
+  const lng = Number(item.lon)
+  const lat = Number(item.lat)
+  const coordinates = { lng, lat }
+
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
+  if (!validCoordinates(coordinates)) return null
+
+  const address =
+    typeof item.address === 'object' &&
+    item.address !== null &&
+    !Array.isArray(item.address)
+      ? (item.address as Record<string, unknown>)
+      : {}
+
+  function text(source: Record<string, unknown>, key: string): string {
+    const value = source[key]
+    return typeof value === 'string' ? value.trim() : ''
+  }
+
+  const locality =
+    text(address, 'city') ||
+    text(address, 'town') ||
+    text(address, 'village') ||
+    text(address, 'hamlet') ||
+    text(address, 'municipality')
+
+  const streetAddress = [text(address, 'road'), text(address, 'house_number')]
+    .filter(Boolean)
+    .join(' ')
+
+  const displayFirst = text(item, 'display_name').split(',')[0]?.trim() ?? ''
+
+  const name =
+    text(item, 'name') ||
+    streetAddress ||
+    locality ||
+    displayFirst ||
+    `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+
+  const region = text(address, 'state') || text(address, 'county')
+  const country = text(address, 'country')
+
+  const displayName = [...new Set([name, locality, region, country])]
+    .filter(Boolean)
+    .join(', ')
+
+  const osmId = item.osm_id
+  const osmType = text(item, 'osm_type')
+
+  const id =
+    typeof osmId === 'number' || typeof osmId === 'string'
+      ? `${osmType || 'osm'}:${osmId}`
+      : `${lng}:${lat}:${name}`
+
+  return {
+    id,
+    name,
+    displayName,
+    coordinates,
+    region,
+    country,
+    locality: locality || null,
   }
 }
 

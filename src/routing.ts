@@ -21,7 +21,12 @@ import type {
   ValidationIssue,
 } from './types'
 
-const MAX_ROUTES = 3
+export const DEFAULT_MAX_ROUTES = 3
+
+export interface CalculateOptions {
+  /** Сколько вариантов маршрута вернуть. */
+  maxRoutes?: number
+}
 
 interface RouteLabel {
   option: ResolvedTravelOption
@@ -179,6 +184,7 @@ function compareLabels(
 function takeBestLabels(
   labels: readonly RouteLabel[],
   optimization: OptimizationMode,
+  limit: number,
 ): RouteLabel[] {
   const unique = new Map<string, RouteLabel>()
 
@@ -189,7 +195,7 @@ function takeBestLabels(
 
   return [...unique.values()]
     .sort((left, right) => compareLabels(left, right, optimization))
-    .slice(0, MAX_ROUTES)
+    .slice(0, limit)
 }
 
 function reconstructLegs(
@@ -257,7 +263,13 @@ function missingRoute(
 export function calculateRoute(
   project: TripProject,
   parameters: RouteSearchParameters = project.routeSearch,
+  calcOptions: CalculateOptions = {},
 ): RouteCalculationResult {
+  const maxRoutes = Math.max(
+    1,
+    Math.floor(calcOptions.maxRoutes ?? DEFAULT_MAX_ROUTES),
+  )
+
   const issues: ValidationIssue[] = []
   const nodeMap = new Map(
     project.nodes.map((node) => [node.id, node]),
@@ -441,6 +453,7 @@ export function calculateRoute(
     const bestForOption = takeBestLabels(
       candidates,
       parameters.optimization,
+      maxRoutes,
     )
 
     // Достигнув конечной точки, маршрут завершаем.
@@ -448,6 +461,7 @@ export function calculateRoute(
       finalLabels = takeBestLabels(
         [...finalLabels, ...bestForOption],
         parameters.optimization,
+        maxRoutes,
       )
       continue
     }

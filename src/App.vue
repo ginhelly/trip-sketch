@@ -9,6 +9,7 @@ import RouteSearchPanel from './components/RouteSearchPanel.vue'
 import EdgeSummary from './components/EdgeSummary.vue'
 import ProjectToolbar from './components/ProjectToolbar.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 
 import { useRouting } from './composables/useRouting'
 import { useProject } from './composables/useProject'
@@ -17,11 +18,13 @@ import { useRouteSearchParams } from './composables/useRouteSearchParams'
 import { useTravelOptions } from './composables/useTravelOptions'
 import { useProjectFile } from './composables/useProjectFile'
 import { useHistory } from './composables/useHistory'
+import { useSettings } from './composables/useSettings'
+import { useBottomSheet } from './composables/useBottomSheet'
 
 import {
-  BASEMAP_PRESETS,
   CUSTOM_BASEMAP_ID,
   basemapFromPreset,
+  basemapOptions,
   basemapPresetId,
 } from './basemaps'
 import { createId } from './storage'
@@ -45,13 +48,19 @@ const {
   replaceStoredProject,
 } = useProject()
 
+const { settings } = useSettings()
+
+const mainRef = ref<HTMLElement | null>(null)
+const sheet = useBottomSheet(mainRef)
+const settingsOpen = ref(false)
+
 const {
   routeState,
   selectedRouteIndex,
   highlight,
   calculate,
   resetRoutes,
-} = useRouting(project)
+} = useRouting(project, () => settings.value.maxRoutes)
 
 const mode = ref<EditorMode>('select')
 const selection = ref<MapSelection>({ kind: 'none' })
@@ -105,6 +114,7 @@ const {
 } = useGeocoding({
   project,
   notify,
+  provider: () => settings.value.geocoder,
   onNodeTimeZoneDetected: handleNodeTimeZoneDetected,
 })
 
@@ -205,6 +215,12 @@ const modeHint = computed(() => {
     return 'Щёлкните по карте, чтобы поставить точку.'
   }
 
+  if (mode.value === 'add-node-edge') {
+    return pendingFromNodeId.value === null
+      ? 'Выберите исходную точку: от неё пойдёт новая связь.'
+      : 'Теперь щёлкните по карте, где поставить новую точку.'
+  }
+
   if (mode.value === 'add-edge') {
     return pendingFromNodeId.value === null
       ? 'Выберите начальную точку связи.'
@@ -228,18 +244,24 @@ onBeforeUnmount(() => {
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
 
-const basemapId = computed(() => basemapPresetId(project.value.basemap))
+const basemaps = computed(() =>
+  basemapOptions(settings.value.customTileServices),
+)
+
+const basemapId = computed(() =>
+  basemapPresetId(project.value.basemap, settings.value.customTileServices),
+)
 
 function changeBasemap(event: Event): void {
   const id = (event.target as HTMLSelectElement).value
-  const next = basemapFromPreset(id)
+  const next = basemapFromPreset(id, settings.value.customTileServices)
 
   if (!next) return
 
   project.value.basemap = next
   mapError.value = ''
 
-  const warning = BASEMAP_PRESETS.find((item) => item.id === id)?.warning
+  const warning = basemaps.value.find((item) => item.id === id)?.warning
   if (warning) notify(warning)
 }
 
@@ -261,6 +283,14 @@ function openNodeDialog(nodeId: string): void {
 }
 
 function selectNode(nodeId: string): void {
+  if (mode.value === 'add-node-edge') {
+    // Повторный клик по другой точке меняет исходную.
+    pendingFromNodeId.value = nodeId
+    selection.value = { kind: 'node', nodeId }
+    notice.value = ''
+    return
+  }
+
   if (mode.value !== 'add-edge') {
     openNodeDialog(nodeId)
     return
@@ -349,6 +379,28 @@ function handleMapClick(coordinates: Coordinates): void {
     return
   }
 
+  if (mode.value === 'add-node-edge') {
+    const fromNodeId = pendingFromNodeId.value
+
+    if (fromNodeId === null) {
+      notice.value = 'Сначала выберите исходную точку.'
+      return
+    }
+
+    const node = addManualNode(coordinates)
+
+    const edge = {
+      id: createId(),
+      fromNodeId,
+      toNodeId: node.id,
+      options: [],
+    }
+
+    project.value.edges.push(edge)
+    selectEdge(edge.id)
+    return
+  }
+
   if (mode.value === 'select') {
     selection.value = { kind: 'none' }
   }
@@ -373,7 +425,7 @@ function createNode(
   }
 }
 
-function addManualNode(coordinates: Coordinates): void {
+function addManualNode(coordinates: Coordinates): TripNode {
   const name = `Точка ${project.value.nodes.length + 1}`
   const node = createNode(coordinates, name)
 
@@ -382,6 +434,8 @@ function addManualNode(coordinates: Coordinates): void {
   selection.value = { kind: 'node', nodeId: node.id }
 
   void lookupNodePlace(node.id, name)
+
+  return node
 }
 
 function addSearchResult(result: GeocodingResult): void {
@@ -572,9 +626,10 @@ function autoDetectSelectedNodeTimeZone(): void {
       @export-project="exportCurrentProject"
       @import-project="importSelectedFile"
       @new-project="newProject"
+      @open-settings="settingsOpen = true"
     />
 
-    <main class="app-main">
+    <main ref="mainRef" class="app-main" :style="sheet.containerStyle.value">
       <section class="map-section">
         <TripMap
           ref="mapRef"
@@ -586,6 +641,9 @@ function autoDetectSelectedNodeTimeZone(): void {
           :selection="selection"
           :highlight="highlight"
           :pending-from-node-id="pendingFromNodeId"
+          :start-node-id="project.routeSearch.startNodeId"
+          :end-node-id="project.routeSearch.endNodeId"
+          :allow-dragging="settings.allowNodeDragging"
           @map-click="handleMapClick"
           @node-click="selectNode"
           @edge-click="selectEdge"
@@ -599,7 +657,7 @@ function autoDetectSelectedNodeTimeZone(): void {
           <span>Подложка</span>
           <select :value="basemapId" @change="changeBasemap">
             <option
-              v-for="preset in BASEMAP_PRESETS"
+              v-for="preset in basemaps"
               :key="preset.id"
               :value="preset.id"
             >
@@ -662,6 +720,14 @@ function autoDetectSelectedNodeTimeZone(): void {
 
             <button
               type="button"
+              class="danger small-button"
+              @click="deleteSelectedNode"
+            >
+              Удалить
+            </button>
+
+            <button
+              type="button"
               class="small-button"
               aria-label="Снять выделение"
               @click="selection = { kind: 'none' }"
@@ -675,12 +741,30 @@ function autoDetectSelectedNodeTimeZone(): void {
             :edge="selectedEdge"
             :nodes="project.nodes"
             @edit="selectEdge"
+            @delete="deleteSelectedEdge"
             @close="selection = { kind: 'none' }"
           />
         </div>
       </section>
 
-      <aside class="sidebar">
+      <aside
+        class="sidebar"
+        :class="{ 'is-dragging': sheet.dragging.value }"
+        :style="sheet.sheetStyle.value"
+      >
+        <button
+          type="button"
+          class="sheet-handle"
+          aria-label="Размер панели: потяните или нажмите, чтобы изменить"
+          @pointerdown="sheet.onHandlePointerDown"
+          @pointermove="sheet.onHandlePointerMove"
+          @pointerup="sheet.onHandlePointerUp"
+          @pointercancel="sheet.onHandlePointerCancel"
+          @keydown="sheet.onHandleKeydown"
+        >
+          <span class="sheet-grabber" />
+        </button>
+
         <details v-if="mapError" class="notice warning">
           <summary>Ошибка карты или подложки</summary>
           <p>{{ mapError }}</p>
@@ -733,6 +817,7 @@ function autoDetectSelectedNodeTimeZone(): void {
         <RouteSearchPanel
           v-model:parameters="project.routeSearch"
           :nodes="project.nodes"
+          :max-routes="settings.maxRoutes"
           @start-change="applyStartTimeZone"
           @calculate="calculate"
         />
@@ -802,6 +887,11 @@ function autoDetectSelectedNodeTimeZone(): void {
         </template>
       </aside>
     </main>
+
+    <SettingsDialog
+      v-model:open="settingsOpen"
+      :settings="settings"
+    />
 
     <NodeDialog
       v-model:open="nodeDialogOpen"

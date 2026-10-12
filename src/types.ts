@@ -6,7 +6,11 @@ export type TimeZoneSource = 'automatic' | 'manual' | 'unknown'
 
 export type OptimizationMode = 'cheapest' | 'earliest-arrival'
 
-export type EditorMode = 'select' | 'add-node' | 'add-edge'
+export type EditorMode =
+  | 'select'
+  | 'add-node'
+  | 'add-edge'
+  | 'add-node-edge'
 
 export type DstDisambiguation = 'reject' | 'earlier' | 'later'
 

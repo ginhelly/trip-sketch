@@ -182,3 +182,40 @@ describe('долгая пересадка в маршруте', () => {
     expect(route.summary.totalCost).toBe(700)
   })
 })
+
+describe('число вариантов маршрута', () => {
+  const nodes = [node('a'), node('c')]
+
+  const edges: Array<[string, string, TravelOption[]]> = [
+    [
+      'a',
+      'c',
+      [
+        card('x1', 100, '2026-10-20T08:00', '2026-10-20T10:00'),
+        card('x2', 110, '2026-10-20T09:00', '2026-10-20T11:00'),
+        card('x3', 120, '2026-10-20T10:00', '2026-10-20T12:00'),
+        card('x4', 130, '2026-10-20T11:00', '2026-10-20T13:00'),
+      ],
+    ],
+  ]
+
+  function count(maxRoutes?: number): number {
+    const result = calculateRoute(
+      project(nodes, edges),
+      undefined,
+      maxRoutes === undefined ? {} : { maxRoutes },
+    )
+
+    return result.status === 'found' ? result.routes.length : -1
+  }
+
+  it('по умолчанию три', () => {
+    expect(count()).toBe(3)
+  })
+
+  it('учитывает заданное число', () => {
+    expect(count(1)).toBe(1)
+    expect(count(4)).toBe(4)
+    expect(count(10)).toBe(4)
+  })
+})

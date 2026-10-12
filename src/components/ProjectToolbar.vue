@@ -25,6 +25,7 @@ const emit = defineEmits<{
   'export-project': []
   'import-project': [file: File]
   'new-project': []
+  'open-settings': []
 }>()
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -151,6 +152,16 @@ function handleFileSelected(event: Event): void {
       >
         + Связь
       </button>
+
+      <button
+        type="button"
+        :class="{ active: mode === 'add-node-edge' }"
+        :aria-pressed="mode === 'add-node-edge'"
+        title="Выберите исходную точку, затем место новой точки"
+        @click="emit('set-mode', 'add-node-edge')"
+      >
+        + Точка со связью
+      </button>
     </div>
 
     <details ref="projectMenu" class="project-menu">
@@ -170,6 +181,16 @@ function handleFileSelected(event: Event): void {
         </button>
       </div>
     </details>
+
+    <button
+      type="button"
+      class="settings-button"
+      title="Настройки сервиса"
+      aria-label="Настройки сервиса"
+      @click="emit('open-settings')"
+    >
+      ⚙
+    </button>
 
     <input
       ref="fileInput"
