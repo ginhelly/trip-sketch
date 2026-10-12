@@ -45,6 +45,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'map-click': [coordinates: Coordinates]
   'node-click': [nodeId: string]
+  'node-context': [nodeId: string, anchor: { x: number; y: number }]
   'edge-click': [edgeId: string]
   'edge-select': [edgeId: string]
   'node-move': [nodeId: string, coordinates: Coordinates]
@@ -312,6 +313,14 @@ function createNodeMarker(
 
   element.addEventListener('dblclick', (event) => {
     event.stopPropagation()
+  })
+
+  // Правая кнопка мыши или долгое нажатие на телефоне.
+  element.addEventListener('contextmenu', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    emit('node-context', node.id, { x: event.clientX, y: event.clientY })
   })
 
   const marker = new Marker({

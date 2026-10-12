@@ -10,6 +10,7 @@ import EdgeSummary from './components/EdgeSummary.vue'
 import ProjectToolbar from './components/ProjectToolbar.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import NodeMenu from './components/NodeMenu.vue'
 
 import { useRouting } from './composables/useRouting'
 import { useProject } from './composables/useProject'
@@ -96,6 +97,7 @@ function confirmAction(message: string): boolean {
 const {
   setRouteStart,
   setRouteEnd,
+  clearRouteRole,
   applyStartTimeZone,
   handleNodeTimeZoneDetected,
 } = useRouteSearchParams({ project, notify })
@@ -282,7 +284,42 @@ function openNodeDialog(nodeId: string): void {
   nodeDialogOpen.value = true
 }
 
+// Меню быстрых действий у выбранной точки.
+const nodeMenu = ref<{ nodeId: string; x: number; y: number } | null>(null)
+
+const menuNode = computed(
+  () =>
+    project.value.nodes.find((node) => node.id === nodeMenu.value?.nodeId) ??
+    null,
+)
+
+function closeNodeMenu(): void {
+  nodeMenu.value = null
+}
+
+function menuAction(action: (nodeId: string) => void): void {
+  const id = nodeMenu.value?.nodeId
+
+  closeNodeMenu()
+
+  if (id) action(id)
+}
+
+// Правый клик по точке: меню быстрых действий (только в обычном режиме).
+function openNodeMenu(
+  nodeId: string,
+  anchor: { x: number; y: number },
+): void {
+  if (mode.value !== 'select') return
+  if (!project.value.nodes.some((node) => node.id === nodeId)) return
+
+  selection.value = { kind: 'node', nodeId }
+  nodeMenu.value = { nodeId, ...anchor }
+}
+
 function selectNode(nodeId: string): void {
+  closeNodeMenu()
+
   if (mode.value === 'add-node-edge') {
     // Повторный клик по другой точке меняет исходную.
     pendingFromNodeId.value = nodeId
@@ -374,6 +411,8 @@ function selectEdge(edgeId: string): void {
 }
 
 function handleMapClick(coordinates: Coordinates): void {
+  closeNodeMenu()
+
   if (mode.value === 'add-node') {
     addManualNode(coordinates)
     return
@@ -458,6 +497,7 @@ function addSearchResult(result: GeocodingResult): void {
 }
 
 function moveNode(nodeId: string, coordinates: Coordinates): void {
+  closeNodeMenu()
   const node = project.value.nodes.find((item) => item.id === nodeId)
   if (!node) return
 
@@ -646,6 +686,7 @@ function autoDetectSelectedNodeTimeZone(): void {
           :allow-dragging="settings.allowNodeDragging"
           @map-click="handleMapClick"
           @node-click="selectNode"
+          @node-context="openNodeMenu"
           @edge-click="selectEdge"
           @edge-select="selectEdgeOnly"
           @node-move="moveNode"
@@ -887,6 +928,20 @@ function autoDetectSelectedNodeTimeZone(): void {
         </template>
       </aside>
     </main>
+
+    <NodeMenu
+      v-if="nodeMenu && menuNode"
+      :name="menuNode.name"
+      :x="nodeMenu.x"
+      :y="nodeMenu.y"
+      :is-start="project.routeSearch.startNodeId === menuNode.id"
+      :is-end="project.routeSearch.endNodeId === menuNode.id"
+      @start="menuAction(setRouteStart)"
+      @end="menuAction(setRouteEnd)"
+      @regular="menuAction(clearRouteRole)"
+      @edit="menuAction(openNodeDialog)"
+      @close="closeNodeMenu"
+    />
 
     <SettingsDialog
       v-model:open="settingsOpen"

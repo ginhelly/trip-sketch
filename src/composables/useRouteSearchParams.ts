@@ -24,6 +24,14 @@ export function useRouteSearchParams(options: UseRouteSearchParamsOptions) {
     project.value.routeSearch.endNodeId = nodeId
   }
 
+  /** Делает точку обычной: снимает с неё роль начала и конца. */
+  function clearRouteRole(nodeId: NodeId): void {
+    const search = project.value.routeSearch
+
+    if (search.startNodeId === nodeId) search.startNodeId = null
+    if (search.endNodeId === nodeId) search.endNodeId = null
+  }
+
   function applyStartTimeZone(): void {
     const search = project.value.routeSearch
     const node = project.value.nodes.find(
@@ -62,6 +70,7 @@ export function useRouteSearchParams(options: UseRouteSearchParamsOptions) {
   return {
     setRouteStart,
     setRouteEnd,
+    clearRouteRole,
     applyStartTimeZone,
     handleNodeTimeZoneDetected,
   }
