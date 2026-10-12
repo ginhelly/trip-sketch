@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { calculateRoute } from './routing'
 import { createEmptyProject } from './storage'
@@ -11,8 +11,6 @@ import type {
   TripProject,
 } from './types'
 
-// browser-geo-tz при загрузке обращается к window; для расчёта он не нужен.
-vi.mock('browser-geo-tz', () => ({ find: async () => [] }))
 
 const TZ = 'Europe/Moscow'
 

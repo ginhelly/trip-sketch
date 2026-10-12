@@ -1,6 +1,6 @@
 import { Temporal } from '@js-temporal/polyfill'
 
-import * as GeoTZ from 'browser-geo-tz'
+import tzLookup from '@photostructure/tz-lookup'
 
 import type {
   Coordinates,
@@ -721,25 +721,21 @@ export async function lookupTimeZones(
 
   if (cached) return [...cached]
 
-  const result: unknown = await GeoTZ.find(
-    coordinates.lat,
-    coordinates.lng,
-  )
+  // Данные зон встроены в библиотеку: внешних запросов нет.
+  // Возвращается ровно одна зона.
+  let zone: unknown
 
-  if (!Array.isArray(result)) {
-    throw new Error('Сервис определения таймзон вернул неожиданные данные.')
+  try {
+    zone = tzLookup(coordinates.lat, coordinates.lng)
+  } catch {
+    zone = null
   }
 
-  const validZones = result.filter(
-    (value: unknown): value is string =>
-      typeof value === 'string' && isValidTimeZone(value),
-  )
-
-  const timeZones = [...new Set(validZones)]
-
-  if (timeZones.length === 0) {
+  if (typeof zone !== 'string' || !isValidTimeZone(zone)) {
     throw new Error('Не удалось определить таймзону точки.')
   }
+
+  const timeZones = [zone]
 
   timeZoneCache.set(key, timeZones)
 

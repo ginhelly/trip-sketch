@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { basemapFromPreset, basemapOptions, basemapPresetId } from './basemaps'
 import { parseNominatimBody } from './services'
@@ -10,8 +10,6 @@ import {
   tileServiceToBasemap,
 } from './settings'
 
-// browser-geo-tz при загрузке обращается к window; для разбора ответов он не нужен.
-vi.mock('browser-geo-tz', () => ({ find: async () => [] }))
 
 describe('настройки', () => {
   it('по умолчанию три варианта маршрута, перетаскивание и Photon', () => {
