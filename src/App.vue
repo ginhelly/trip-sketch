@@ -9,13 +9,14 @@ import RouteSearchPanel from './components/RouteSearchPanel.vue'
 import EdgeSummary from './components/EdgeSummary.vue'
 import ProjectToolbar from './components/ProjectToolbar.vue'
 
+import { useRouting } from './composables/useRouting'
+import { useProject } from './composables/useProject'
+
 import {
   createEmptyProject,
   createId,
   exportProject,
   importProjectFile,
-  loadProject,
-  saveProject,
 } from './storage'
 
 import {
@@ -26,67 +27,36 @@ import {
   lookupTimeZones,
 } from './services'
 
-import { calculateRoute } from './routing'
-
 import type {
   Coordinates,
   EditorMode,
   GeocodingResult,
   MapCamera,
-  MapHighlight,
   MapSelection,
-  RouteResultState,
   TravelOption,
   TripNode,
   TripProject,
   ValidationIssue,
 } from './types'
 
-const loaded = loadProject()
+const {
+  project,
+  storageBlocked,
+  storageMessage,
+  replaceStoredProject,
+} = useProject()
 
-const project = ref<TripProject>(
-  loaded.ok ? loaded.value : createEmptyProject(),
-)
-
-const storageBlocked = ref(!loaded.ok)
-const storageMessage = ref(
-  loaded.ok
-    ? 'Проект загружен'
-    : `Автосохранение отключено: ${loaded.issues
-        .map((issue) => issue.message)
-        .join(' ')}`,
-)
+const {
+  routeState,
+  selectedRouteIndex,
+  highlight,
+  calculate,
+  resetRoutes,
+} = useRouting(project)
 
 const mode = ref<EditorMode>('select')
 const selection = ref<MapSelection>({ kind: 'none' })
 const pendingFromNodeId = ref<string | null>(null)
-
-const routeState = ref<RouteResultState>({
-  result: null,
-  stale: false,
-})
-
-const selectedRouteIndex = ref(0)
-
-const selectedRoute = computed(() => {
-  const result = routeState.value.result
-
-  if (result?.status !== 'found') return null
-
-  return (
-    result.routes[selectedRouteIndex.value] ??
-    result.routes[0] ??
-    null
-  )
-})
-
-watch(
-  () => routeState.value.result,
-  () => {
-    selectedRouteIndex.value = 0
-  },
-  { flush: 'sync' },
-)
 
 const mapRef = ref<InstanceType<typeof TripMap> | null>(null)
 
@@ -103,7 +73,6 @@ const nodeDialogOpen = ref(false)
 
 const timeZones = getSuggestedTimeZones()
 
-let saveTimer: ReturnType<typeof setTimeout> | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 let searchController: AbortController | null = null
 let searchVersion = 0
@@ -128,70 +97,9 @@ const selectedEdge = computed(() => {
     : null
 })
 
-const highlight = computed<MapHighlight | null>(() => {
-  const route = selectedRoute.value
-
-  if (routeState.value.stale || !route) return null
-
-  return {
-    edgeIds: [
-      ...new Set(route.legs.map((leg) => leg.edgeId)),
-    ],
-    nodeIds: [
-      ...new Set([
-        route.startNodeId,
-        ...route.legs.map((leg) => leg.toNodeId),
-      ]),
-    ],
-  }
-})
-
 function issuesText(issues: ValidationIssue[]): string {
   return issues.map((issue) => issue.message).join(' ')
 }
-
-function saveNow(): void {
-  if (saveTimer !== undefined) {
-    clearTimeout(saveTimer)
-    saveTimer = undefined
-  }
-
-  if (storageBlocked.value) return
-
-  const result = saveProject(project.value)
-
-  if (result.ok) {
-    storageMessage.value =
-      `Сохранено ${new Date().toLocaleTimeString('ru-RU')}`
-  } else {
-    storageMessage.value = `Не сохранено: ${issuesText(result.issues)}`
-  }
-}
-
-function scheduleSave(): void {
-  if (storageBlocked.value) return
-
-  if (saveTimer !== undefined) clearTimeout(saveTimer)
-
-  storageMessage.value = 'Сохранение…'
-  saveTimer = setTimeout(saveNow, 500)
-}
-
-watch(project, scheduleSave, { deep: true })
-
-watch(
-  () => [
-    project.value.nodes,
-    project.value.edges,
-    project.value.routeSearch,
-  ],
-  () => {
-    if (routeState.value.result !== null) {
-      routeState.value.stale = true
-    }
-  },
-  { deep: true, flush: 'sync' },
-)
 
 function setMode(next: EditorMode): void {
   mode.value = next
@@ -637,13 +545,6 @@ function deleteOption(optionId: string): void {
   edge.options = edge.options.filter((option) => option.id !== optionId)
 }
 
-function calculate(): void {
-  routeState.value = {
-    result: calculateRoute(project.value),
-    stale: false,
-  }
-}
-
 function cameraChanged(camera: MapCamera): void {
   project.value.camera = camera
 }
@@ -701,19 +602,16 @@ function stopPendingLookups(): void {
 }
 
 function replaceProject(next: TripProject): void {
-  if (saveTimer !== undefined) {
-    clearTimeout(saveTimer)
-    saveTimer = undefined
-  }
-
   stopPendingLookups()
 
-  project.value = next
-  storageBlocked.value = false
+  replaceStoredProject(next)
+
   selection.value = { kind: 'none' }
   pendingFromNodeId.value = null
   mode.value = 'select'
-  routeState.value = { result: null, stale: false }
+
+  resetRoutes()
+
   searchQuery.value = ''
   mapError.value = ''
   notice.value = ''
@@ -722,7 +620,6 @@ function replaceProject(next: TripProject): void {
   edgeDialogOpen.value = false
 
   mapRef.value?.restoreCamera(next.camera)
-  saveNow()
 }
 
 function newProject(): void {
@@ -771,10 +668,6 @@ async function importSelectedFile(file: File): Promise<void> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function beforeUnload(): void {
-  saveNow()
 }
 
 function autoDetectSelectedNodeTimeZone(): void {
@@ -871,18 +764,15 @@ async function determineNodeTimeZone(nodeId: string): Promise<void> {
   }
 }
 
-window.addEventListener('beforeunload', beforeUnload)
-
 onBeforeUnmount(() => {
   alive = false
 
-  if (searchTimer !== undefined) clearTimeout(searchTimer)
+  if (searchTimer !== undefined) {
+    clearTimeout(searchTimer)
+  }
 
   searchController?.abort()
   stopPendingLookups()
-  saveNow()
-
-  window.removeEventListener('beforeunload', beforeUnload)
 })
 </script>
 
