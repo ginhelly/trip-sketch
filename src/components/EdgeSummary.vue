@@ -13,6 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   edit: [edgeId: string]
+  close: []
 }>()
 
 const title = computed(() => {
@@ -35,24 +36,34 @@ const enabledCount = computed(
 </script>
 
 <template>
-  <section class="panel">
-    <h2>{{ title }}</h2>
-
-    <p class="muted">
-      Вариантов проезда: {{ edge.options.length }}.
-      Включено: {{ enabledCount }}.
-    </p>
-
-    <p v-if="edge.options.length === 0" class="muted">
-      Связь пока без вариантов проезда и не участвует в расчёте.
-    </p>
+  <div class="selection-card" role="status">
+    <div class="selection-card-text">
+      <strong>{{ title }}</strong>
+      <span class="muted">
+        <template v-if="edge.options.length === 0">
+          без вариантов проезда, в расчёте не участвует
+        </template>
+        <template v-else>
+          вариантов: {{ edge.options.length }}, включено: {{ enabledCount }}
+        </template>
+      </span>
+    </div>
 
     <button
       type="button"
-      class="primary full-width"
+      class="primary small-button"
       @click="emit('edit', edge.id)"
     >
-      Редактировать варианты проезда
+      Редактировать
     </button>
-  </section>
+
+    <button
+      type="button"
+      class="small-button"
+      aria-label="Снять выделение"
+      @click="emit('close')"
+    >
+      ×
+    </button>
+  </div>
 </template>

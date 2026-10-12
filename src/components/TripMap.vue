@@ -60,6 +60,7 @@ const nodeMarkers = new Map<string, Marker>()
 const arrowMarkers = new Map<string, Marker>()
 
 const SOURCE_ID = 'trip-edges'
+const CASING_LAYER_ID = 'trip-edges-casing'
 const LINE_LAYER_ID = 'trip-edges-line'
 const HIT_LAYER_ID = 'trip-edges-hit'
 
@@ -166,14 +167,22 @@ function selectedEdge(edgeId: string): boolean {
 }
 
 function edgeColor(edgeId: string): string {
-  if (selectedEdge(edgeId)) return '#f59e0b'
-  if (props.highlight?.edgeIds.includes(edgeId)) return '#22c55e'
+  // Тёмные насыщенные цвета: на светлой подложке читаются лучше светлых.
+  if (selectedEdge(edgeId)) return '#d97706'
+  if (props.highlight?.edgeIds.includes(edgeId)) return '#15803d'
 
   const edge = props.edges.find((item) => item.id === edgeId)
 
   return edge && edge.options.length > 0
-    ? '#60a5fa'
-    : '#94a3b8'
+    ? '#1d4ed8'
+    : '#64748b'
+}
+
+function edgeWidth(edgeId: string): number {
+  if (selectedEdge(edgeId)) return 7
+  if (props.highlight?.edgeIds.includes(edgeId)) return 6
+
+  return 4.5
 }
 
 function edgeOpacity(edgeId: string): number {
@@ -204,7 +213,7 @@ function buildFeatures(): FeatureCollection<LineString | MultiLineString> {
         edgeId: edge.id,
         color: edgeColor(edge.id),
         opacity: edgeOpacity(edge.id),
-        width: selectedEdge(edge.id) ? 5 : 3,
+        width: edgeWidth(edge.id),
       },
       geometry: arc.geometry,
     })
@@ -221,6 +230,24 @@ function installGraphLayers(instance: MapLibreMap): void {
     instance.addSource(SOURCE_ID, {
       type: 'geojson',
       data: buildFeatures(),
+    })
+  }
+
+  if (!instance.getLayer(CASING_LAYER_ID)) {
+    // Белая обводка отделяет линию от рисунка подложки.
+    instance.addLayer({
+      id: CASING_LAYER_ID,
+      type: 'line',
+      source: SOURCE_ID,
+      layout: {
+        'line-cap': 'round',
+        'line-join': 'round',
+      },
+      paint: {
+        'line-color': '#ffffff',
+        'line-width': ['+', ['get', 'width'], 3],
+        'line-opacity': ['*', ['get', 'opacity'], 0.9],
+      },
     })
   }
 
@@ -254,6 +281,7 @@ function installGraphLayers(instance: MapLibreMap): void {
     })
   }
 
+  instance.moveLayer(CASING_LAYER_ID)
   instance.moveLayer(LINE_LAYER_ID)
   instance.moveLayer(HIT_LAYER_ID)
 }
@@ -853,9 +881,9 @@ onBeforeUnmount(() => {
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 1px solid #334155;
+  border: 2px solid currentColor;
   border-radius: 50%;
-  background: #0f172a;
+  background: #ffffff;
   font-family: Arial, sans-serif;
   font-size: 22px;
   line-height: 1;

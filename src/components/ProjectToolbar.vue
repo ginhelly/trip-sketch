@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
+import AppLogo from './AppLogo.vue'
+
 import type {
   EditorMode,
   GeocodingResult,
@@ -77,7 +79,9 @@ function handleFileSelected(event: Event): void {
 
 <template>
   <header class="app-header">
-    <div class="app-brand">Trip Sketch</div>
+    <div class="app-brand">
+      <AppLogo />
+    </div>
 
     <input
       :value="projectName"

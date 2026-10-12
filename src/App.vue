@@ -18,6 +18,12 @@ import { useTravelOptions } from './composables/useTravelOptions'
 import { useProjectFile } from './composables/useProjectFile'
 import { useHistory } from './composables/useHistory'
 
+import {
+  BASEMAP_PRESETS,
+  CUSTOM_BASEMAP_ID,
+  basemapFromPreset,
+  basemapPresetId,
+} from './basemaps'
 import { createId } from './storage'
 import { createDefaultLayover } from './layover'
 import { getSuggestedTimeZones } from './services'
@@ -221,6 +227,21 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleEscape)
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
 })
+
+const basemapId = computed(() => basemapPresetId(project.value.basemap))
+
+function changeBasemap(event: Event): void {
+  const id = (event.target as HTMLSelectElement).value
+  const next = basemapFromPreset(id)
+
+  if (!next) return
+
+  project.value.basemap = next
+  mapError.value = ''
+
+  const warning = BASEMAP_PRESETS.find((item) => item.id === id)?.warning
+  if (warning) notify(warning)
+}
 
 function setMode(next: EditorMode): void {
   mode.value = next
@@ -574,6 +595,31 @@ function autoDetectSelectedNodeTimeZone(): void {
           @map-error="mapError = $event"
         />
 
+        <label class="basemap-picker">
+          <span>Подложка</span>
+          <select :value="basemapId" @change="changeBasemap">
+            <option
+              v-for="preset in BASEMAP_PRESETS"
+              :key="preset.id"
+              :value="preset.id"
+            >
+              {{ preset.label }}
+            </option>
+            <option
+              v-if="basemapId === CUSTOM_BASEMAP_ID"
+              :value="CUSTOM_BASEMAP_ID"
+              disabled
+            >
+              Своя
+              {{
+                project.basemap.kind === 'raster'
+                  ? `(${project.basemap.name})`
+                  : ''
+              }}
+            </option>
+          </select>
+        </label>
+
         <div v-if="modeHint" class="mode-hint" role="status">
           <span>{{ modeHint }}</span>
           <button type="button" class="small-button" @click="setMode('select')">
@@ -581,16 +627,56 @@ function autoDetectSelectedNodeTimeZone(): void {
           </button>
         </div>
 
-        <div v-if="notice" class="toast" role="status" aria-live="polite">
-          <span>{{ notice }}</span>
-          <button
-            type="button"
-            class="small-button"
-            aria-label="Закрыть уведомление"
-            @click="notice = ''"
+        <div class="map-bottom">
+          <div v-if="notice" class="toast" role="status" aria-live="polite">
+            <span>{{ notice }}</span>
+            <button
+              type="button"
+              class="small-button"
+              aria-label="Закрыть уведомление"
+              @click="notice = ''"
+            >
+              ×
+            </button>
+          </div>
+
+          <div
+            v-if="selectedNode"
+            class="selection-card"
+            role="status"
           >
-            ×
-          </button>
+            <div class="selection-card-text">
+              <strong>{{ selectedNode.name }}</strong>
+              <span class="muted">
+                {{ selectedNode.timeZone || 'таймзона не определена' }}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              class="primary small-button"
+              @click="openNodeDialog(selectedNode.id)"
+            >
+              Редактировать
+            </button>
+
+            <button
+              type="button"
+              class="small-button"
+              aria-label="Снять выделение"
+              @click="selection = { kind: 'none' }"
+            >
+              ×
+            </button>
+          </div>
+
+          <EdgeSummary
+            v-if="selectedEdge"
+            :edge="selectedEdge"
+            :nodes="project.nodes"
+            @edit="selectEdge"
+            @close="selection = { kind: 'none' }"
+          />
         </div>
       </section>
 
@@ -660,33 +746,7 @@ function autoDetectSelectedNodeTimeZone(): void {
           @recalculate="calculate"
         />
 
-        <section v-if="selectedNode" class="panel">
-          <h2>{{ selectedNode.name }}</h2>
-
-          <p class="muted">
-            {{ selectedNode.timeZone || 'Таймзона не определена' }}
-          </p>
-
-          <button
-            type="button"
-            class="primary full-width"
-            @click="openNodeDialog(selectedNode.id)"
-          >
-            Редактировать точку
-          </button>
-        </section>
-
-        <EdgeSummary
-          v-if="selectedEdge"
-          :edge="selectedEdge"
-          :nodes="project.nodes"
-          @edit="selectEdge"
-        />
-
-        <section
-          v-if="!selectedNode && !selectedEdge"
-          class="panel"
-        >
+        <section class="panel">
           <h2>Как начать</h2>
 
           <ol class="help-list">
