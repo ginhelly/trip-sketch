@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import TripMap from './components/TripMap.vue'
 import RouteResults from './components/RouteResults.vue'
@@ -11,21 +11,13 @@ import ProjectToolbar from './components/ProjectToolbar.vue'
 
 import { useRouting } from './composables/useRouting'
 import { useProject } from './composables/useProject'
+import { useGeocoding } from './composables/useGeocoding'
+import { useRouteSearchParams } from './composables/useRouteSearchParams'
+import { useTravelOptions } from './composables/useTravelOptions'
+import { useProjectFile } from './composables/useProjectFile'
 
-import {
-  createEmptyProject,
-  createId,
-  exportProject,
-  importProjectFile,
-} from './storage'
-
-import {
-  getSuggestedTimeZones,
-  localDateTimeAt,
-  reverseGeocode,
-  searchPlaces,
-  lookupTimeZones,
-} from './services'
+import { createId } from './storage'
+import { getSuggestedTimeZones } from './services'
 
 import type {
   Coordinates,
@@ -33,10 +25,8 @@ import type {
   GeocodingResult,
   MapCamera,
   MapSelection,
-  TravelOption,
   TripNode,
   TripProject,
-  ValidationIssue,
 } from './types'
 
 const {
@@ -63,23 +53,42 @@ const mapRef = ref<InstanceType<typeof TripMap> | null>(null)
 const notice = ref('')
 const mapError = ref('')
 
-const searchQuery = ref('')
-const searchResults = ref<GeocodingResult[]>([])
-const searchBusy = ref(false)
-const searchError = ref('')
-const reverseBusyCount = ref(0)
+function notify(message: string): void {
+  notice.value = message
+}
+
+function confirmAction(message: string): boolean {
+  return window.confirm(message)
+}
+
+const {
+  setRouteStart,
+  setRouteEnd,
+  applyStartTimeZone,
+  handleNodeTimeZoneDetected,
+} = useRouteSearchParams({ project, notify })
+
+const {
+  searchQuery,
+  searchResults,
+  searchBusy,
+  searchError,
+  reverseBusyCount,
+  clearSearch,
+  lookupNodePlace,
+  determineNodeTimeZone,
+  invalidateNode,
+  resetForNewProject,
+} = useGeocoding({
+  project,
+  notify,
+  onNodeTimeZoneDetected: handleNodeTimeZoneDetected,
+})
+
 const edgeDialogOpen = ref(false)
 const nodeDialogOpen = ref(false)
 
 const timeZones = getSuggestedTimeZones()
-
-let searchTimer: ReturnType<typeof setTimeout> | undefined
-let searchController: AbortController | null = null
-let searchVersion = 0
-let alive = true
-
-const reverseControllers = new Set<AbortController>()
-const nodeLookupVersions = new Map<string, number>()
 
 const selectedNode = computed(() => {
   const current = selection.value
@@ -97,9 +106,27 @@ const selectedEdge = computed(() => {
     : null
 })
 
-function issuesText(issues: ValidationIssue[]): string {
-  return issues.map((issue) => issue.message).join(' ')
-}
+const {
+  addOption,
+  duplicateOption,
+  updateTravelOption,
+  deleteOption,
+} = useTravelOptions({
+  project,
+  selectedEdge,
+  confirm: confirmAction,
+})
+
+const {
+  newProject,
+  exportCurrentProject,
+  importSelectedFile,
+} = useProjectFile({
+  project,
+  notify,
+  confirm: confirmAction,
+  replaceProject,
+})
 
 function setMode(next: EditorMode): void {
   mode.value = next
@@ -238,7 +265,7 @@ function addManualNode(coordinates: Coordinates): void {
   void determineNodeTimeZone(node.id)
   selection.value = { kind: 'node', nodeId: node.id }
 
-  void lookupNode(node.id, name)
+  void lookupNodePlace(node.id, name)
 }
 
 function addSearchResult(result: GeocodingResult): void {
@@ -255,96 +282,16 @@ function addSearchResult(result: GeocodingResult): void {
   mode.value = 'select'
   pendingFromNodeId.value = null
 
-  searchQuery.value = ''
-  searchResults.value = []
+  clearSearch()
 
   mapRef.value?.flyTo(node.coordinates)
-}
-
-async function lookupNode(
-  nodeId: string,
-  replaceNameIfUnchanged?: string,
-): Promise<void> {
-  const node = project.value.nodes.find((item) => item.id === nodeId)
-  if (!node) return
-
-  const projectId = project.value.id
-  const coordinates = { ...node.coordinates }
-  const version = (nodeLookupVersions.get(nodeId) ?? 0) + 1
-
-  nodeLookupVersions.set(nodeId, version)
-
-  const controller = new AbortController()
-  reverseControllers.add(controller)
-  reverseBusyCount.value++
-
-  try {
-    const results = await reverseGeocode(coordinates, {
-      signal: controller.signal,
-    })
-
-    if (
-      !alive ||
-      project.value.id !== projectId ||
-      nodeLookupVersions.get(nodeId) !== version
-    ) {
-      return
-    }
-
-    const current = project.value.nodes.find((item) => item.id === nodeId)
-
-    if (
-      !current ||
-      current.coordinates.lng !== coordinates.lng ||
-      current.coordinates.lat !== coordinates.lat
-    ) {
-      return
-    }
-
-    const result = results[0]
-
-    if (!result) {
-      notice.value = 'Адрес не найден. Название точки можно ввести вручную.'
-      return
-    }
-
-    current.region = result.region
-    current.country = result.country
-
-    if (
-      replaceNameIfUnchanged !== undefined &&
-      current.name === replaceNameIfUnchanged
-    ) {
-      current.name = result.locality || result.name
-    }
-
-    notice.value = `По координатам найдено: ${result.displayName}`
-  } catch (error) {
-    if (
-      alive &&
-      !controller.signal.aborted &&
-      project.value.id === projectId &&
-      nodeLookupVersions.get(nodeId) === version
-    ) {
-      notice.value = errorMessage(error)
-    }
-  } finally {
-    reverseControllers.delete(controller)
-
-    if (alive) {
-      reverseBusyCount.value = Math.max(0, reverseBusyCount.value - 1)
-    }
-  }
 }
 
 function moveNode(nodeId: string, coordinates: Coordinates): void {
   const node = project.value.nodes.find((item) => item.id === nodeId)
   if (!node) return
 
-  nodeLookupVersions.set(
-    nodeId,
-    (nodeLookupVersions.get(nodeId) ?? 0) + 1,
-  )
+  invalidateNode(nodeId)
 
   node.coordinates = { ...coordinates }
 
@@ -371,34 +318,6 @@ function updateNodeTimeZone(timeZone: string): void {
   notice.value =
     'Таймзона точки изменена. ' +
     'Таймзоны существующих карточек остаются прежними.'
-}
-
-function setRouteStart(nodeId: string): void {
-  project.value.routeSearch.startNodeId = nodeId
-  applyStartTimeZone()
-}
-
-function applyStartTimeZone(): void {
-  const search = project.value.routeSearch
-  const node = project.value.nodes.find(
-    (item) => item.id === search.startNodeId,
-  )
-
-  if (!node) return
-
-  search.earliestDeparture.timeZone = node.timeZone ?? ''
-  search.earliestDeparture.disambiguation = 'reject'
-
-  if (!search.earliestDeparture.localDateTime && node.timeZone) {
-    try {
-      search.earliestDeparture.localDateTime = localDateTimeAt(
-        Date.now(),
-        node.timeZone,
-      )
-    } catch {
-      notice.value = 'Проверьте таймзону начальной точки.'
-    }
-  }
 }
 
 function deleteSelectedNode(): void {
@@ -437,7 +356,7 @@ function deleteSelectedNode(): void {
     project.value.routeSearch.endNodeId = null
   }
 
-  nodeLookupVersions.delete(node.id)
+  invalidateNode(node.id)
   pendingFromNodeId.value = null
   selection.value = { kind: 'none' }
 }
@@ -460,11 +379,7 @@ function lookupSelectedNodePlace(): void {
   const node = selectedNode.value
   if (!node) return
 
-  void lookupNode(node.id, node.name)
-}
-
-function setRouteEnd(nodeId: string): void {
-  project.value.routeSearch.endNodeId = nodeId
+  void lookupNodePlace(node.id, node.name)
 }
 
 function deleteSelectedEdge(): void {
@@ -482,127 +397,12 @@ function deleteSelectedEdge(): void {
   selection.value = { kind: 'none' }
 }
 
-function updateTravelOption(option: TravelOption): void {
-  const edge = selectedEdge.value
-  if (!edge) return
-
-  const index = edge.options.findIndex(
-    (item) => item.id === option.id,
-  )
-
-  if (index === -1) return
-
-  edge.options.splice(index, 1, option)
-}
-
-function addOption(): void {
-  const edge = selectedEdge.value
-  if (!edge) return
-
-  const from = project.value.nodes.find(
-    (node) => node.id === edge.fromNodeId,
-  )
-
-  const to = project.value.nodes.find(
-    (node) => node.id === edge.toNodeId,
-  )
-
-  edge.options.push({
-    id: createId(),
-    name: '',
-    descriptionMarkdown: '',
-    cost: 0,
-    departure: {
-      localDateTime: '',
-      timeZone: from?.timeZone ?? '',
-      disambiguation: 'reject',
-    },
-    arrival: {
-      localDateTime: '',
-      timeZone: to?.timeZone ?? '',
-      disambiguation: 'reject',
-    },
-    enabled: true,
-  })
-}
-
-function duplicateOption(option: TravelOption): void {
-  selectedEdge.value?.options.push({
-    ...option,
-    id: createId(),
-    name: option.name ? `${option.name} — копия` : '',
-    departure: { ...option.departure },
-    arrival: { ...option.arrival },
-  })
-}
-
-function deleteOption(optionId: string): void {
-  const edge = selectedEdge.value
-  if (!edge) return
-
-  if (!window.confirm('Удалить этот вариант проезда?')) return
-
-  edge.options = edge.options.filter((option) => option.id !== optionId)
-}
-
 function cameraChanged(camera: MapCamera): void {
   project.value.camera = camera
 }
 
-watch(searchQuery, (query) => {
-  if (searchTimer !== undefined) clearTimeout(searchTimer)
-
-  searchController?.abort()
-  searchController = null
-
-  const version = ++searchVersion
-  searchResults.value = []
-  searchError.value = ''
-  searchBusy.value = false
-
-  if (query.trim().length < 2) return
-
-  searchTimer = setTimeout(async () => {
-    const controller = new AbortController()
-    searchController = controller
-    searchBusy.value = true
-
-    try {
-      const results = await searchPlaces(query, {
-        signal: controller.signal,
-        bias: project.value.camera.center,
-      })
-
-      if (alive && version === searchVersion) {
-        searchResults.value = results
-
-        if (results.length === 0) {
-          searchError.value = 'Ничего не найдено.'
-        }
-      }
-    } catch (error) {
-      if (
-        alive &&
-        version === searchVersion &&
-        !controller.signal.aborted
-      ) {
-        searchError.value = errorMessage(error)
-      }
-    } finally {
-      if (alive && version === searchVersion) {
-        searchBusy.value = false
-      }
-    }
-  }, 450)
-})
-
-function stopPendingLookups(): void {
-  for (const controller of reverseControllers) controller.abort()
-  nodeLookupVersions.clear()
-}
-
 function replaceProject(next: TripProject): void {
-  stopPendingLookups()
+  resetForNewProject()
 
   replaceStoredProject(next)
 
@@ -612,7 +412,6 @@ function replaceProject(next: TripProject): void {
 
   resetRoutes()
 
-  searchQuery.value = ''
   mapError.value = ''
   notice.value = ''
 
@@ -620,54 +419,6 @@ function replaceProject(next: TripProject): void {
   edgeDialogOpen.value = false
 
   mapRef.value?.restoreCamera(next.camera)
-}
-
-function newProject(): void {
-  if (
-    !window.confirm(
-      'Создать новый проект? Текущий локальный проект будет заменён. При необходимости сначала экспортируйте его.',
-    )
-  ) {
-    return
-  }
-
-  replaceProject(createEmptyProject())
-}
-
-function exportCurrentProject(): void {
-  const result = exportProject(project.value)
-
-  if (!result.ok) {
-    notice.value = issuesText(result.issues)
-  } else {
-    notice.value =
-      'JSON подготовлен. Учтите: пользовательские URL подложки экспортируются вместе с проектом.'
-  }
-}
-
-async function importSelectedFile(file: File): Promise<void> {
-  const result = await importProjectFile(file)
-
-  if (!alive) return
-
-  if (!result.ok) {
-    notice.value = `Импорт отклонён: ${issuesText(result.issues)}`
-    return
-  }
-
-  if (
-    !window.confirm(
-      `Заменить текущий проект на «${result.value.name}»?`,
-    )
-  ) {
-    return
-  }
-
-  replaceProject(result.value)
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function autoDetectSelectedNodeTimeZone(): void {
@@ -680,100 +431,6 @@ function autoDetectSelectedNodeTimeZone(): void {
   void determineNodeTimeZone(node.id)
 }
 
-async function determineNodeTimeZone(nodeId: string): Promise<void> {
-  const node = project.value.nodes.find((item) => item.id === nodeId)
-
-  if (!node || node.timeZoneSource === 'manual') return
-
-  const projectId = project.value.id
-  const coordinates = { ...node.coordinates }
-
-  try {
-    const zones = await lookupTimeZones(coordinates)
-
-    if (!alive || project.value.id !== projectId) return
-
-    const current = project.value.nodes.find(
-      (item) => item.id === nodeId,
-    )
-
-    if (
-      !current ||
-      current.timeZoneSource === 'manual' ||
-      current.coordinates.lng !== coordinates.lng ||
-      current.coordinates.lat !== coordinates.lat
-    ) {
-      return
-    }
-
-    if (zones.length !== 1) {
-      notice.value =
-        `Для «${current.name}» найдены разные таймзоны: ` +
-        `${zones.join(', ')}. Выберите вручную.`
-      return
-    }
-
-    const timeZone = zones[0]!
-
-    current.timeZone = timeZone
-    current.timeZoneSource = 'automatic'
-
-    // Заполняем только пустые таймзоны карточек.
-    // Уже заданное время существующих рейсов не изменяем.
-    for (const edge of project.value.edges) {
-      for (const option of edge.options) {
-        if (
-          edge.fromNodeId === nodeId &&
-          !option.departure.timeZone.trim()
-        ) {
-          option.departure.timeZone = timeZone
-        }
-
-        if (
-          edge.toNodeId === nodeId &&
-          !option.arrival.timeZone.trim()
-        ) {
-          option.arrival.timeZone = timeZone
-        }
-      }
-    }
-
-    if (
-      project.value.routeSearch.startNodeId === nodeId &&
-      !project.value.routeSearch.earliestDeparture.timeZone.trim()
-    ) {
-      applyStartTimeZone()
-    }
-  } catch (error) {
-    if (!alive || project.value.id !== projectId) return
-
-    const current = project.value.nodes.find(
-      (item) => item.id === nodeId,
-    )
-
-    if (
-      current &&
-      current.timeZoneSource !== 'manual' &&
-      current.coordinates.lng === coordinates.lng &&
-      current.coordinates.lat === coordinates.lat
-    ) {
-      notice.value =
-        `Таймзону «${current.name}» определите вручную. ` +
-        errorMessage(error)
-    }
-  }
-}
-
-onBeforeUnmount(() => {
-  alive = false
-
-  if (searchTimer !== undefined) {
-    clearTimeout(searchTimer)
-  }
-
-  searchController?.abort()
-  stopPendingLookups()
-})
 </script>
 
 <template>
